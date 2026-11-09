@@ -14,8 +14,9 @@ the kernel version.
 - **Keep-alive in Kodi**: between tracks the card keeps playing silence (see Limits), so
   the receiver stays locked and the start of the next track is not cut off.
 
-Hardware scope: Raspberry Pi 0-4 (BCM2835 to BCM2711), tested only on one Pi 4B. Not the
-Pi 5: its I2S block is a different one. The ready-made add-on is for 64-bit systems
+Hardware scope: Raspberry Pi 0-4 (BCM2835 to BCM2711), tested only on one Pi 4B. The
+Pi 5 is untested: the plugin does not touch the hardware, so it may work, but its I2S block is a
+different one; reports are welcome. The ready-made add-on is for 64-bit systems
 (aarch64); the plugin tarball is also built for armhf (untested).
 
 ## Hardware
@@ -173,7 +174,7 @@ Not tested: other Pi models, Raspberry Pi OS, armhf, other receivers, hours-long
   names starting with `iec958`, `spdif` or `hdmi`.
 - **96 kHz with aplay's default large buffer fails** (hw_params refuse the period); Kodi
   does not hit this.
-- Pi 0-4 family by design, but tested only on one Pi 4B. Not the Pi 5.
+- Pi 0-4 family by design, but tested only on one Pi 4B. Pi 5 untested.
 - The 3.3 V GPIO level and the TOSLINK module are your responsibility; see Hardware.
 - Receivers can take a second or two to lock after a sample-rate change and may swallow
   the start of a stream then. Fixing the player's output rate (Kodi: output configuration
