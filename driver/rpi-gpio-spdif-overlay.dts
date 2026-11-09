@@ -1,0 +1,32 @@
+// S/PDIF output on GPIO21 (PCM_DOUT, pin 40) through the PCM/I2S block, driver
+// rpi_gpio_spdif.ko. Takes over the I2S node: no I2S sound card at the same time.
+// Only GPIO21 is muxed; GPIO18..20 stay free.
+//   dtc -@ -I dts -O dtb -o rpi-gpio-spdif.dtbo rpi-gpio-spdif-overlay.dts
+//   dtoverlay -d <dir> rpi-gpio-spdif     (at runtime)   or   dtoverlay=rpi-gpio-spdif
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&gpio>;
+		__overlay__ {
+			rpi_gpio_spdif_pins: rpi_gpio_spdif_pins {
+				brcm,pins = <21>;
+				brcm,function = <4>;	/* ALT0: PCM_DOUT */
+				brcm,pull = <0>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&i2s>;
+		__overlay__ {
+			compatible = "ehb,rpi-gpio-spdif";
+			pinctrl-names = "default";
+			pinctrl-0 = <&rpi_gpio_spdif_pins>;
+			status = "okay";
+		};
+	};
+};

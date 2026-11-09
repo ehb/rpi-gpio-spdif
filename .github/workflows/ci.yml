@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  encoder:
+    name: encoder test
+    runs-on: ubuntu-24.04
+    container: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sh ci/install_deps.sh
+      - run: sh ci/test_encoder.sh
+
+  driver:
+    name: module, overlay, checkpatch
+    runs-on: ubuntu-24.04
+    container: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sh ci/install_deps.sh
+      - name: Derive kernel from the newest listed LibreELEC
+        id: le
+        run: |
+          LE=$(grep -v '^#' ci/libreelec-versions.txt | tail -n 1)
+          mkdir -p build/le
+          python3 ci/le_kernel.py derive "$LE" --config build/le/linux.conf > build/le/kernel.env
+          cat build/le/kernel.env
+          cat build/le/kernel.env >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/kernel
+          key: kernel-${{ steps.le.outputs.KCOMMIT }}-${{ steps.le.outputs.KCONFIG_SHA256 }}-${{ hashFiles('ci/prepare_kernel.sh') }}
+      - name: Build module, overlay and add-on zip
+        run: sh ci/build_for_le.sh build/le/kernel.env build/le/linux.conf 0 build/out
+      - name: checkpatch
+        env:
+          KTREE: build/kernel/linux-${{ steps.le.outputs.KCOMMIT }}
+        run: sh ci/checkpatch.sh "$KTREE"
+
+  driver-master:
+    name: module against LibreELEC master (experimental)
+    runs-on: ubuntu-24.04
+    container: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sh ci/install_deps.sh
+      - name: Build module against the development branch
+        run: |
+          mkdir -p build/le
+          python3 ci/le_kernel.py derive master --config build/le/linux.conf > build/le/kernel.env
+          cat build/le/kernel.env
+          sh ci/prepare_kernel.sh build/le/kernel.env build/le/linux.conf build/kernel
+          . build/le/kernel.env
+          sh ci/build_module.sh "build/kernel/linux-$KCOMMIT" build/le/out "$KVER_HINT"

@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Start/stop helper of the LibreELEC add-on driver.audio.rpi-gpio-spdif.
+#   start: load the module (if built for the running kernel), apply the overlay,
+#          provide the ALSA configuration in /var/lib/alsa/conf.d/50-rpi-gpio-spdif.conf
+#   stop:  undo that (the module stays loaded while an application has the card open)
+# Module options: one line in /storage/.config/rpi-gpio-spdif.options, for example
+#   chunks=12 chunk_frames=256
+A=/storage/.kodi/addons/driver.audio.rpi-gpio-spdif
+OPTS_FILE=/storage/.config/rpi-gpio-spdif.options
+# alsa.conf of LibreELEC reads every *.conf in /var/lib/alsa/conf.d (a tmpfs) before
+# /run/asound.conf and /storage/.config/asound.conf; each add-on keeps its own file there
+CONFD=/var/lib/alsa/conf.d
+ASOUND=$CONFD/50-rpi-gpio-spdif.conf
+MARK="# written by driver.audio.rpi-gpio-spdif"
+KO="$A/kernel-overlay/lib/modules/$(cat "$A/KVER")/updates/driver.audio.rpi-gpio-spdif/rpi_gpio_spdif.ko"
+
+STATUS=/run/rpi-gpio-spdif.status
+
+log() { echo "rpi-gpio-spdif: $*"; }
+# fail: log, leave the reason for the Kodi notification (default.py), exit
+fail() { log "$*"; echo "$*" > "$STATUS"; exit 1; }
+
+loaded() { grep -q '^rpi_gpio_spdif ' /proc/modules; }
+overlay_applied() { dtoverlay -l 2>/dev/null | grep -q ' rpi-gpio-spdif$'; }
+
+start() {
+  rm -f "$STATUS"
+  KVER=$(cat "$A/KVER")
+  if [ "$(uname -r)" != "$KVER" ]; then
+    fail "built for kernel $KVER, running $(uname -r): not loading (install the build for this LibreELEC version)"
+  fi
+  if pidof raspdif > /dev/null; then
+    fail "raspdif is running and drives the same hardware: not loading"
+  fi
+  if ! loaded; then
+    OPTS=$(cat "$OPTS_FILE" 2> /dev/null)
+    # modprobe works once kernel-overlays-setup has linked the module (after the first reboot)
+    modprobe rpi_gpio_spdif $OPTS 2> /dev/null || insmod "$KO" $OPTS || fail "loading the module failed (see journalctl -k)"
+  else
+    log "module already loaded (manual installation?), using it as it is"
+  fi
+  overlay_applied || dtoverlay -d "$A/overlays" rpi-gpio-spdif || fail "applying the overlay failed"
+  if [ -e "$ASOUND" ] && ! grep -q "^$MARK" "$ASOUND"; then
+    log "$ASOUND exists and is not ours: leaving it alone, the card works without the iec958 hook"
+  else
+    mkdir -p "$CONFD" && { echo "$MARK"; cat "$A/alsa/asound.conf"; } > "$ASOUND.tmp" &&
+      mv "$ASOUND.tmp" "$ASOUND" || log "cannot write $ASOUND, the card works without the iec958 hook"
+  fi
+  grep -q SPDIFout /proc/asound/cards && log "card SPDIFout ready"
+}
+
+stop() {
+  rm -f "$STATUS"
+  rm -f "$ASOUND.tmp"
+  grep -q "^$MARK" "$ASOUND" 2> /dev/null && rm -f "$ASOUND"
+  rmdir "$CONFD" 2> /dev/null
+  overlay_applied && dtoverlay -r rpi-gpio-spdif
+  loaded && { rmmod rpi_gpio_spdif 2> /dev/null || log "card in use, module stays loaded"; }
+  return 0
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  *) echo "usage: $0 start|stop"; exit 2 ;;
+esac

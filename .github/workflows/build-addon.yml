@@ -1,0 +1,59 @@
+name: build-addon
+
+# One add-on zip per LibreELEC version, called by release and libreelec-watch.
+on:
+  workflow_call:
+    inputs:
+      versions:
+        description: JSON array of LibreELEC versions
+        required: true
+        type: string
+      ref:
+        description: Git ref of the driver source
+        required: true
+        type: string
+      rev:
+        description: Last part of the add-on version
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  zip:
+    name: zip for LibreELEC ${{ matrix.le }}
+    runs-on: ubuntu-24.04
+    container: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        le: ${{ fromJSON(inputs.versions) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - run: sh ci/install_deps.sh
+      - name: Derive kernel from LibreELEC
+        id: le
+        env:
+          LE: ${{ matrix.le }}
+        run: |
+          mkdir -p build/le
+          python3 ci/le_kernel.py derive "$LE" --config build/le/linux.conf > build/le/kernel.env
+          cat build/le/kernel.env
+          cat build/le/kernel.env >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/kernel
+          key: kernel-${{ steps.le.outputs.KCOMMIT }}-${{ steps.le.outputs.KCONFIG_SHA256 }}-${{ hashFiles('ci/prepare_kernel.sh') }}
+      - name: Build
+        env:
+          REV: ${{ inputs.rev }}
+        run: sh ci/build_for_le.sh build/le/kernel.env build/le/linux.conf "$REV" dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: addon-${{ matrix.le }}
+          path: dist/*.zip
+          if-no-files-found: error
