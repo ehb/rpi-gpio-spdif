@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
 # Debian 12 packages for the CI jobs (runs as root in the container, or with sudo).
 set -e
 SUDO=
@@ -6,5 +7,6 @@ SUDO=
 export DEBIAN_FRONTEND=noninteractive
 $SUDO apt-get update -qq
 $SUDO apt-get install -y --no-install-recommends \
-    bc binutils bison build-essential ca-certificates curl device-tree-compiler flex \
-    gcc-aarch64-linux-gnu libc6-dev libelf-dev libssl-dev make perl python3 tar xz-utils zstd
+    alsa-utils binutils-aarch64-linux-gnu binutils-arm-linux-gnueabihf build-essential \
+    ca-certificates gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf libc6-dev-arm64-cross \
+    libc6-dev-armhf-cross libasound2-dev make python3 tar unzip

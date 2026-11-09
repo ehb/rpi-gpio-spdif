@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="driver.audio.rpi-gpio-spdif"
-       name="S/PDIF output on GPIO21 (rpi-gpio-spdif)"
+<addon id="service.rpi-gpio-spdif"
+       name="S/PDIF output on GPIO21 (ALSA plugin)"
        version="@VERSION@"
        provider-name="ehb">
   <requires>
@@ -8,8 +8,8 @@
   </requires>
   <extension point="xbmc.service" library="default.py"/>
   <extension point="xbmc.addon.metadata">
-    <summary lang="en_GB">Optical/coaxial S/PDIF out on a Raspberry Pi GPIO, with AC3/DTS passthrough</summary>
-    <description lang="en_GB">Kernel driver that encodes S/PDIF in software and sends it out through the PCM/I2S block on GPIO21 (pin 40). Wire a TOSLINK transmitter module (or a coax driver) to GPIO21, 5V and GND. Kodi sees an IEC958 sound card "SPDIFout" and offers AC3/DTS passthrough.[CR][CR]Built for LibreELEC @LEVERSION@ (kernel @KVER@) only: after a LibreELEC update this add-on does nothing until a matching build is installed. Do not run it together with raspdif.</description>
+    <summary lang="en_GB">Optical/coaxial S/PDIF out on a Raspberry Pi GPIO without a kernel driver, with AC3/DTS passthrough</summary>
+    <description lang="en_GB">An ALSA plugin encodes S/PDIF (biphase-mark) in software and plays it through the stock I2S driver of the kernel (overlay hifiberry-dac), so the signal appears on GPIO21 (pin 40). Wire a TOSLINK transmitter module (or a coax driver) to GPIO21, 5V and GND. Kodi gets the audio device "hdmi_bmc" (shown as "S/PDIF on GPIO21") and offers AC3/DTS passthrough on it.[CR][CR]Depends on the architecture (aarch64, LibreELEC on a 64-bit Raspberry Pi), not on the kernel version. Do not run it together with the kernel driver add-on driver.audio.rpi-gpio-spdif or with raspdif.</description>
     <platform>linux</platform>
     <license>GPL-2.0-only</license>
     <source>https://github.com/ehb/rpi-gpio-spdif</source>

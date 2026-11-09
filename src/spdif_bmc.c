@@ -4,11 +4,6 @@
  */
 #include "spdif_bmc.h"
 
-#ifdef __KERNEL__
-#include <linux/bitrev.h>
-#include <linux/string.h>
-#define bmc_rev32(x)	bitrev32(x)
-#else
 #include <string.h>
 
 static u32 bmc_rev32(u32 x)
@@ -20,7 +15,6 @@ static u32 bmc_rev32(u32 x)
 		r = (r << 1) | (x & 1);
 	return r;
 }
-#endif
 
 /* Preambles, valid after a sub-frame that ended low (always, thanks to even parity) */
 static const u8 bmc_preamble[3] = {

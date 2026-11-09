@@ -15,16 +15,12 @@
 #ifndef SPDIF_BMC_H
 #define SPDIF_BMC_H
 
-#ifdef __KERNEL__
-#include <linux/types.h>
-#else
 #include <stdbool.h>
 #include <stdint.h>
 typedef uint8_t u8;
 typedef uint32_t u32;
 typedef int32_t s32;
 typedef uint64_t u64;
-#endif
 
 #define SPDIF_BMC_BLOCK		192	/* frames per channel status block */
 #define SPDIF_BMC_STATUS_BYTES	(SPDIF_BMC_BLOCK / 8)

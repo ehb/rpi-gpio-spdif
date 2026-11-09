@@ -1,68 +1,88 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Package the LibreELEC add-on driver.audio.rpi-gpio-spdif as an installable zip.
+"""Package the LibreELEC add-on service.rpi-gpio-spdif as an installable zip.
 
-The module only loads into the kernel it was built against, so one zip serves exactly one
-LibreELEC version. Version scheme as LibreELEC's own driver add-ons: <LE version>.<revision>.
+The add-on holds the aarch64 spdifbmc plugin, a start/stop script, a systemd unit and the
+settings. It is tied to the architecture, not to a kernel or LibreELEC version.
+Version: --version, else the newest entry of CHANGELOG.md.
 
-  python libreelec/build_addon.py --ko rpi_gpio_spdif.ko --dtbo rpi-gpio-spdif.dtbo \\
-      --kver 6.12.56 --le 12.2.1 [--rev 1] [--out build]
+  python libreelec/build_addon.py --so build/aarch64/libasound_module_pcm_spdifbmc.so \\
+      [--version 0.2.0] [--out build]
 
---ko    module built against that LibreELEC kernel (vermagic is checked)
---dtbo  overlay compiled from driver/rpi-gpio-spdif-overlay.dts (dtc -@ -I dts -O dtb)
+The plugin is checked for ELF class 64-bit, little endian, machine AArch64.
 """
 import argparse
 import os
 import re
+import struct
 import sys
 import zipfile
 
-ID = "driver.audio.rpi-gpio-spdif"
+ID = "service.rpi-gpio-spdif"
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+ADDON = os.path.join(HERE, "addon")
+EM_AARCH64 = 183
 
 
-def vermagic(ko):
-    data = open(ko, "rb").read()
-    m = re.search(rb"vermagic=([^\x00]*)", data)
-    return m.group(1).decode() if m else None
+def elf_problem(path):
+    """None if path is a little-endian 64-bit AArch64 ELF, else the reason."""
+    with open(path, "rb") as f:
+        head = f.read(20)
+    if len(head) < 20 or head[:4] != b"\x7fELF":
+        return "not an ELF file"
+    if head[4] != 2 or head[5] != 1:
+        return "not a 64-bit little-endian ELF"
+    machine = struct.unpack_from("<H", head, 18)[0]
+    if machine != EM_AARCH64:
+        return "machine %d, not AArch64 (%d)" % (machine, EM_AARCH64)
+    return None
+
+
+def changelog_version():
+    text = open(os.path.join(ROOT, "CHANGELOG.md"), encoding="ascii").read()
+    m = re.search(r"^## (\d+\.\d+\.\d+)\s*$", text, re.M)
+    if not m:
+        sys.exit("CHANGELOG.md has no '## x.y.z' entry; pass --version")
+    return m.group(1)
+
+
+def read(*parts):
+    with open(os.path.join(*parts), "rb") as f:
+        return f.read()
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ko", required=True)
-    ap.add_argument("--dtbo", required=True)
-    ap.add_argument("--kver", required=True, help="uname -r of the target LibreELEC")
-    ap.add_argument("--le", required=True, help="LibreELEC version, e.g. 12.2.1")
-    ap.add_argument("--rev", default="1")
+    ap.add_argument("--so", required=True, help="aarch64 libasound_module_pcm_spdifbmc.so")
+    ap.add_argument("--version", help="add-on version x.y.z (default: CHANGELOG.md)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build"))
     a = ap.parse_args()
 
-    vm = vermagic(a.ko)
-    if not vm or vm.split()[0] != a.kver:
-        sys.exit("module vermagic %r does not match --kver %s" % (vm, a.kver))
-    if open(a.dtbo, "rb").read(4) != b"\xd0\x0d\xfe\xed":
-        sys.exit("%s is not a compiled device tree overlay" % a.dtbo)
-
-    version = "%s.%s" % (a.le, a.rev)
-    xml = open(os.path.join(HERE, "addon", "addon.xml.in"), encoding="ascii").read()
-    xml = xml.replace("@VERSION@", version).replace("@LEVERSION@", a.le).replace("@KVER@", a.kver)
+    if not os.path.isfile(a.so):
+        sys.exit("--so: no such file: %s" % a.so)
+    why = elf_problem(a.so)
+    if why:
+        sys.exit("--so %s: %s -- this add-on is for 64-bit Raspberry Pi (aarch64) only" % (a.so, why))
+    version = a.version or changelog_version()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        sys.exit("version %r is not x.y.z" % version)
+    xml = open(os.path.join(ADDON, "addon.xml.in"), encoding="ascii").read()
+    xml = xml.replace("@VERSION@", version)
 
     files = [  # (path in the add-on, bytes, executable)
         ("addon.xml", xml.encode("ascii"), False),
-        ("KVER", (a.kver + "\n").encode("ascii"), False),
-        ("default.py", open(os.path.join(HERE, "addon", "default.py"), "rb").read(), False),
-        ("LICENSE.txt", open(os.path.join(ROOT, "LICENSE"), "rb").read(), False),
-        ("bin/rpi-gpio-spdif", open(os.path.join(HERE, "addon", "bin", "rpi-gpio-spdif"), "rb").read(), True),
-        ("system.d/%s.service" % ID,
-         open(os.path.join(HERE, "addon", "system.d", ID + ".service"), "rb").read(), False),
-        ("alsa/asound.conf", open(os.path.join(ROOT, "alsa", "asound-libreelec.conf"), "rb").read(), False),
-        ("overlays/rpi-gpio-spdif.dtbo", open(a.dtbo, "rb").read(), False),
-        ("kernel-overlay/lib/modules/%s/updates/%s/rpi_gpio_spdif.ko" % (a.kver, ID),
-         open(a.ko, "rb").read(), False),
+        ("default.py", read(ADDON, "default.py"), False),
+        ("LICENSE.txt", read(ROOT, "LICENSE"), False),
+        ("bin/rpi-gpio-spdif", read(ADDON, "bin", "rpi-gpio-spdif"), True),
+        ("lib/libasound_module_pcm_spdifbmc.so", read(a.so), False),
+        ("system.d/%s.service" % ID, read(ADDON, "system.d", ID + ".service"), False),
+        ("resources/settings.xml", read(ADDON, "resources", "settings.xml"), False),
+        ("resources/language/resource.language.en_gb/strings.po",
+         read(ADDON, "resources", "language", "resource.language.en_gb", "strings.po"), False),
     ]
     for name, data, _ in files:
-        if name.endswith((".service", ".conf", ".py", ".xml")) or name.startswith("bin/"):
+        if name.endswith((".service", ".py", ".xml", ".po")) or name.startswith("bin/"):
             if b"\r" in data:
                 sys.exit("%s has CR line endings" % name)
 

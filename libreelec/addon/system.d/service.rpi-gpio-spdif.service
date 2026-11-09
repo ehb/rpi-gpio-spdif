@@ -1,0 +1,14 @@
+[Unit]
+Description=S/PDIF output on GPIO21 through an ALSA plugin (rpi-gpio-spdif)
+After=local-fs.target
+Before=kodi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# start applies the overlay and writes the ALSA configuration before Kodi is started
+ExecStart=/bin/sh /storage/.kodi/addons/service.rpi-gpio-spdif/bin/rpi-gpio-spdif start
+ExecStopPost=/bin/sh /storage/.kodi/addons/service.rpi-gpio-spdif/bin/rpi-gpio-spdif stop
+
+[Install]
+WantedBy=kodi.service

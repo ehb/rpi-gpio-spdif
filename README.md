@@ -1,52 +1,22 @@
 # rpi-gpio-spdif
 
 S/PDIF (optical TOSLINK or coaxial) audio output on a Raspberry Pi GPIO, without an
-audio HAT and without a transceiver chip. A Linux kernel driver encodes the S/PDIF
-signal in software and sends it out through the Pi's PCM/I2S block on GPIO21; a
-TOSLINK transmitter module on that pin is all the hardware you need.
+audio HAT and without a transceiver chip. An ALSA plugin encodes the S/PDIF signal in
+software and plays it through the Pi's stock I2S driver on GPIO21; a TOSLINK transmitter
+module on that pin is all the hardware you need. No kernel module, so nothing depends on
+the kernel version.
 
-- A real ALSA sound card: PCM stereo at 32 / 44.1 / 48 / 88.2 / 96 kHz, 16/24/32 bit (S/PDIF carries 24 significant bits;
-  the lowest 8 bits of S32 are dropped).
-- **AC3/DTS passthrough** through the standard IEC958 control (non-audio flag): Kodi and
-  other players offer passthrough on the `iec958` device as they do for HDMI.
-- **Correct latency reporting** (`snd_pcm_delay`), so players keep picture and sound in
-  sync.
-- **Keep-alive**: between tracks the driver sends encoded silence, so the receiver
-  stays locked and the start of the next track is not cut off.
+- **AC3/DTS passthrough**: Kodi offers passthrough on the device `hdmi_bmc` as it does for
+  HDMI.
+- **PCM** at 32 / 44.1 / 48 / 88.2 / 96 kHz, 16/24/32 bit (S/PDIF carries 24 significant
+  bits; the lowest 8 bits of S32 are dropped).
+- **Latency is reported** (`snd_pcm_delay`), so players keep picture and sound in sync.
+- **Keep-alive in Kodi**: between tracks the card keeps playing silence (see Limits), so
+  the receiver stays locked and the start of the next track is not cut off.
 
-Hardware scope: Raspberry Pi 0-4 (BCM2835 to BCM2711). Not the Pi 5: its I2S block is a
-different one. Only the Pi 4 has been tested, and the ready-made LibreELEC add-on zips
-exist only for the Pi 4 (see below).
-
-## Status
-
-Tested on a **Raspberry Pi 4B** with LibreELEC 12.2.1 (kernel 6.12.56), Kodi 21 and a
-Yamaha receiver on its optical input:
-
-- PCM at 32, 44.1, 48, 88.2 and 96 kHz and in S32: each signal plays for the right time, and
-  the bit clock in the kernel's clock tree is rate x 128.
-- AC3 and DTS passthrough from Kodi: the receiver shows Dolby Digital for AC3 and plays the
-  DTS test signal; both reach the card with the non-audio flag set.
-- Lip sync with a flash/click test video in Kodi, checked by eye, sound as PCM through
-  alsa-leadtap.
-- 20 rate switches between 44.1 and 48 kHz, pause/resume (playing time correct to 10 ms),
-  `dmix` with two streams at different rates.
-- Open/close stress: 60 short plays at changing rates, 20 players killed in mid-stream,
-  Keep Alive on and off: no kernel messages from the driver.
-- About 2 hours of internet radio: no late DMA callbacks, no FIFO underruns; softirq load
-  about 1 % of one Cortex-A72 core.
-- The encoder is byte-identical to raspdif's encoder (golden vectors) and to a plain
-  reference implementation over 200,000 random frames (`test/bmc_check.c`).
-- The LibreELEC add-on: disable/enable, uninstall and reinstall, update while Kodi plays
-  (Kodi reopens the card by itself after about 5 s), refusing a mismatching kernel, by
-  calling LibreELEC's add-on hooks the way Kodi calls them. Installing the zip through
-  Kodi's user interface (as an update over an installed version) works.
-
-Not tested: other Pi models (only a Pi 4B was available), other receivers, kernels
-other than 6.12 (6.18 builds, but was never loaded), Raspberry Pi OS (the build
-and ALSA card steps below are written for it, but only LibreELEC has run). Suspend: the Raspberry Pi kernel offers no sleep state
-(`/sys/power/state` is empty); the driver stops feeding on a SUSPEND trigger but has
-no resume path.
+Hardware scope: Raspberry Pi 0-4 (BCM2835 to BCM2711), tested only on one Pi 4B. Not the
+Pi 5: its I2S block is a different one. The ready-made add-on is for 64-bit systems
+(aarch64); the plugin tarball is also built for armhf (untested).
 
 ## Hardware
 
@@ -62,8 +32,8 @@ an old PC sound card or bought as a module.
 The 3.3 V level of GPIO21 is enough as "high" for the module that was tested (supplied
 with 5 V). If you see dropouts, add a 100 nF capacitor across the module's Vcc and GND.
 
-The driver takes over the I2S block, so it cannot be combined with an I2S DAC/HAT.
-GPIO18-20 stay free.
+The plugin uses the I2S block, so it cannot be combined with an I2S DAC/HAT. GPIO18-20
+stay free.
 
 Other ways to get the signal out (not built or tested here):
 
@@ -84,137 +54,143 @@ many TOSLINK parts are specified to 96 kHz, and the main use of 192 kHz on S/PDI
 Kodi transcodes E-AC3 to AC3 instead. Dolby TrueHD and DTS-HD Master Audio need HDMI in any
 case.
 
-## LibreELEC add-on
+## Install
 
-`libreelec/` packages driver, overlay, ALSA configuration and a start unit as a Kodi
-add-on (`driver.audio.rpi-gpio-spdif`). A module only loads into the kernel it was built
-for, so each zip is for exactly one LibreELEC version. Zips are built only for the
-LibreELEC **RPi4 (aarch64) image**, and attached to each release on the
-[Releases page](https://github.com/ehb/rpi-gpio-spdif/releases); pick the one that matches
-your LibreELEC version exactly. Other Pi models or images would have to be built by hand
-(see Build below); that is untested.
+**LibreELEC / Kodi, 64-bit Raspberry Pi.** Install the add-on `service.rpi-gpio-spdif`:
 
-The add-on version is `<LibreELEC version>.<revision>`. The release workflow derives the
-revision from the tag (`ci/le_kernel.py rev`): major x 10000 + minor x 100 + patch, so the
-tag `v0.1.0` gives revision 100 and the zip for LibreELEC 12.2.1 is `12.2.1.100`; a later
-`v0.1.1` gives `12.2.1.101`, which Kodi sees as an update. To build a zip yourself
-(the revision defaults to 1):
+- from the Kodi repository of [pi-lockstep](https://github.com/ehb/pi-lockstep) (Kodi then
+  keeps it up to date), or
+- from the zip `service.rpi-gpio-spdif-<version>.zip` on the
+  [Releases page](https://github.com/ehb/rpi-gpio-spdif/releases) (Settings -> Add-ons ->
+  Install from zip file; allow unknown sources first).
 
-```sh
-python libreelec/build_addon.py --ko driver/rpi_gpio_spdif.ko --dtbo rpi-gpio-spdif.dtbo \
-    --kver 6.12.56 --le 12.2.1 --rev 100
-```
+**Restart Kodi once after the first install:** a running Kodi does not see the new audio
+device. The add-on then applies the stock overlay `hifiberry-dac` when Kodi's services
+start, waits for the sound card, and writes the ALSA configuration to
+`/var/lib/alsa/conf.d/50-rpi-gpio-spdif.conf` (a drop-in directory that LibreELEC's
+alsa.conf reads), so your own `/storage/.config/asound.conf` stays untouched. It depends on
+the architecture, not on the LibreELEC version, so a LibreELEC update does not break it. It
+refuses to start (and tells you in a notification) if the kernel driver of version 0.1.0 or
+raspdif is active.
 
-Install the zip in Kodi (Settings -> Add-ons -> Install from zip file; allow unknown
-sources first). LibreELEC's add-on hooks then enable the unit, which loads the module and
-the overlay before Kodi starts and writes its ALSA part to `/var/lib/alsa/conf.d/50-rpi-gpio-spdif.conf` (a drop-in directory
-that LibreELEC's alsa.conf reads; other add-ons can add their own files), so your own
-`/storage/.config/asound.conf` stays untouched (and is read after it). Kodi picks up the new
-card without a restart. Module options go into `/storage/.config/rpi-gpio-spdif.options`
-as one line, e.g. `chunks=12 chunk_frames=256`. After a LibreELEC
-update the add-on loads nothing until a matching build is installed, and Kodi shows a
-notification saying so.
+In Kodi: Settings -> System -> Audio, choose **"S/PDIF on GPIO21" (`hdmi_bmc`)** as audio
+output device **and** as passthrough device, and enable AC3/DTS. Kodi offers passthrough only
+on devices named `iec958`, `spdif` or `hdmi`, which is why the device name begins with
+`hdmi_`. With speakers set to 2.0, Kodi can also re-encode multichannel sources it cannot
+pass through (AAC/Opus 5.1 and similar) to AC3 ("Dolby Digital (AC3) transcoding").
 
-## Build
-
-You need the kernel tree (or headers with `modules_prepare` done) of the exact kernel
-you run.
-
-```sh
-make -C /lib/modules/$(uname -r)/build M=$PWD/driver modules
-dtc -@ -I dts -O dtb -o rpi-gpio-spdif.dtbo driver/rpi-gpio-spdif-overlay.dts
-```
-
-Cross-compiling for a 64-bit Pi: add `ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-`.
-
-## Load
-
-```sh
-sudo insmod driver/rpi_gpio_spdif.ko
-sudo dtoverlay -d . rpi-gpio-spdif          # at runtime, only while nothing else is bound to I2S
-```
-
-or permanently: copy `rpi-gpio-spdif.dtbo` to `/boot/firmware/overlays/` (older systems
-`/boot/overlays/`), add `dtoverlay=rpi-gpio-spdif` to `config.txt` and install the module
-so that it loads at boot. The card appears as `SPDIFout`:
+**Other systems (Raspberry Pi OS, ...).** Take `rpi-gpio-spdif-<version>-aarch64.tar.gz` (or
+`-armhf`) from the Releases page, put the library somewhere persistent, add
+`dtoverlay=hifiberry-dac` to `config.txt`, and define the device in `/etc/asound.conf`.
+This path has not been run; it is the same configuration the add-on writes:
 
 ```
-$ cat /proc/asound/cards
- 2 [SPDIFout       ]: RPiGPIOSPDIF - RPi S/PDIF out
+pcm_type.spdifbmc {
+    lib "/path/to/libasound_module_pcm_spdifbmc.so"
+}
+
+pcm.hdmi_bmc {
+    @args [ AES0 AES1 AES2 AES3 ]
+    @args.AES0 { type integer default -1 }
+    @args.AES1 { type integer default -1 }
+    @args.AES2 { type integer default -1 }
+    @args.AES3 { type integer default -1 }
+    type spdifbmc
+    slave.pcm "hw:CARD=sndrpihifiberry"
+    extra_ms 80
+    aes0 $AES0
+    aes1 $AES1
+    aes2 $AES2
+    aes3 $AES3
+}
 ```
 
-Module parameters (all optional):
+To build the plugin yourself: `make` (needs the ALSA headers; `make test` runs the tests and
+also needs `aplay` and Python 3).
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `index` | first free | ALSA card index |
-| `chunks`, `chunk_frames` | 4, 256 | DMA ring: chunks x frames; the output latency is about `chunks - 1` chunks (4 x 256 at 48 kHz: ~16 ms) |
-| `keep_alive` | 1 | initial value of the Keep Alive control |
+### Setting extra_ms
 
-## ALSA setup
-
-Install `alsa/RPiGPIOSPDIF.conf` as `/usr/share/alsa/cards/RPiGPIOSPDIF.conf`. That gives
-the usual `iec958:CARD=SPDIFout` device, which writes the channel status (including the
-non-audio flag for passthrough) on open. Where `/usr/share/alsa` is read-only
-(LibreELEC), append `alsa/asound-libreelec.conf` to `/storage/.config/asound.conf`
-instead. **This is only for a manual install without the LibreELEC add-on:** the add-on
-writes `/var/lib/alsa/conf.d/50-rpi-gpio-spdif.conf` itself, and adding the same
-definitions to `asound.conf` as well would duplicate them.
-
-```sh
-aplay -D iec958:CARD=SPDIFout test.wav
-```
-
-**Kodi** lists the card under System -> Audio as "RPi S/PDIF out" and offers it as a
-passthrough device (only devices named `iec958`/`spdif`/`hdmi` get passthrough in
-Kodi 21). Choose it for both the audio and the passthrough device, enable AC3/DTS.
-With speakers set to 2.0, Kodi can also re-encode multichannel sources it cannot pass
-through (AAC/Opus 5.1 and similar) to AC3 ("Dolby Digital (AC3) transcoding"). Volume:
-Kodi's volume control has no effect on passthrough (the receiver decodes the untouched
-bitstream), but it does apply when Kodi transcodes to AC3 (tested with AAC 5.1).
-
-Controls (`amixer -c SPDIFout contents`):
-
-| Control | Meaning |
-|---|---|
-| IEC958 Playback Default | channel status; sample rate and word length are filled in where left unspecified; a change takes effect at the next 192-frame block |
-| IEC958 Playback Con Mask | which status bits can be set |
-| Keep Alive Playback Switch | keep sending silence after the last stream closed (default on) |
-
-## Multi-room / visualisation
-
-Use alsa-leadtap (a separate project) between the application and this card. The card
-itself is playback only.
+`extra_ms` (add-on setting, default 80, 0 to 500; default 0 when you configure the plugin by hand) keeps that many milliseconds of encoded
+silence queued ahead of the audio. The plugin reports the extra delay to the player, which
+compensates it, so picture and sound stay in sync. It exists for a player that makes an
+early copy of the audio, such as [alsa-leadtap](https://github.com/ehb/alsa-leadtap) in front
+of this device: its copy runs ahead of the sound by a fixed lead, and the buffer behind it
+has to hold at least that much. With a lead of 180 ms and `extra_ms` 0 the copy was dropped
+now and then; 80 fixed it. If nothing makes an early copy, you can set 0. A changed value
+applies the next time the device is opened.
 
 ## How it works
 
 S/PDIF is biphase-mark coded: every bit becomes two half-cells, and each 32-slot
-sub-frame (preamble, 24-bit sample, V, U, C, parity) becomes 64 line bits. Clocking the
-PCM block at fs x 128 with 32-bit frames turns one stereo sample frame into exactly four
-FIFO words. The driver encodes into a ring of DMA chunks; after each chunk the DMA
-callback encodes the chunks that have been played from the ALSA buffer (or silence).
-The playing position comes from the DMA residue, `pointer()` reports the frames taken
-from the ALSA buffer and `runtime->delay` the encoded frames still ahead of the pin.
+sub-frame (preamble, 24-bit sample, V, U, C, parity) becomes 64 line bits. Sent as S32_LE
+stereo at twice the sample rate, one stereo frame of audio becomes exactly two stereo frames
+of 32-bit words: the 64 line bits of one sub-frame are one such frame, bit for bit. The
+stock `bcm2835-i2s` driver clocks them out on GPIO21 (PCM_DOUT) at 128 x the sample rate.
+The overlay `hifiberry-dac` that ships with the Pi kernel gives that driver a sound card
+that accepts S32_LE.
 
-Why not a mode of the existing `bcm2835-i2s` driver: that driver hands its data path to
-the generic dmaengine PCM, which DMAs straight from the application buffer. Here every
-4-byte stereo sample becomes 16 bytes of line code, so the driver needs its own ring and
-its own pointer and delay accounting -- the very part a mode would have to replace. The
-overlay switches the I2S node to this driver by its compatible string, which also keeps
-the two from ever running at the same time.
+The plugin (`spdifbmc`, an ALSA ioplug) takes ordinary PCM from the application, builds the
+sub-frames with the channel status (rate and word length from the stream; the bytes Kodi
+passes for passthrough, including the non-audio flag, when it gives them) and writes the
+coded words to the card. IEC 61937 data (AC3/DTS) is passed on unchanged as the sample
+data. The encoder is `src/spdif_bmc.c`; `test/bmc_check.c` checks it against golden
+vectors made by raspdif's encoder and against a plain reference implementation.
 
-Receivers can take a second or two to lock after a sample-rate change and may swallow
-the start of a stream then. Fixing the player's output rate (Kodi: output configuration
-"fixed", 48 kHz) avoids most rate changes.
+## Status
 
-## Tests and tools
+Measured on a **Raspberry Pi 4B** with LibreELEC (kernel 6.12), Kodi 21 and a receiver on its
+optical input:
 
-- `test/bmc_check.c` -- encoder against golden vectors and a reference implementation:
-  `cc -O2 -Idriver -o bmc_check test/bmc_check.c driver/spdif_bmc.c -lm && ./bmc_check`
+- PCM at 32, 44.1 and 48 kHz and in S32 plays for the right time with a bit clock of
+  rate x 128; 88.2 kHz plays; Kodi opens the card at 96 kHz S32.
+- 20 rate switches and 40 open/close cycles, 14 players killed in mid-stream, an IEC 61937
+  file: no kernel messages; CPU 0.5 to 3 % of one core.
+- A Dolby Digital test file played with `aplay` makes the receiver show Dolby Digital. From
+  Kodi, PCM, AC3 and DTS were checked for lip sync with a flash/click test video, by eye
+  and ear (it fits); the receiver showed Dolby Digital and DTS.
+- Keep-alive inside Kodi: after a stop the card keeps playing silence for 30 s (Kodi's
+  `audiooutput.streamsilence`), measured.
+- Behind alsa-leadtap with `extra_ms` 80: the early copy ran without dropouts (with 0 it did
+  not, see above).
+- The add-on: installed through Kodi's user interface, and after a reboot of the Pi
+  everything came up by itself.
+- Selftests without hardware (`make test`, `test/test_addon.sh`): encoder against golden
+  vectors, plugin against a file slave decoded like a receiver would, short writes, the
+  add-on helper and the zip.
+
+Not tested: other Pi models, Raspberry Pi OS, armhf, other receivers, hours-long runs.
+
+## Limits
+
+- **No `dmix`.** The plugin needs a hw device as its slave and has to mix before encoding.
+  For Kodi (exclusive access) that does not matter; two programs at once cannot share the
+  output.
+- **No keep-alive outside Kodi.** The signal stops when the last stream is
+  closed, and the receiver may cut off the start of the next sound. Kodi avoids this by
+  keeping the device open with silence; other players do not.
+- **The card is named after the overlay** (`sndrpihifiberry`), not "SPDIF".
+- **Passthrough relies on the device name** `hdmi_...`: Kodi offers passthrough only for
+  names starting with `iec958`, `spdif` or `hdmi`.
+- **96 kHz with aplay's default large buffer fails** (hw_params refuse the period); Kodi
+  does not hit this.
+- Pi 0-4 family by design, but tested only on one Pi 4B. Not the Pi 5.
+- The 3.3 V GPIO level and the TOSLINK module are your responsibility; see Hardware.
+- Receivers can take a second or two to lock after a sample-rate change and may swallow
+  the start of a stream then. Fixing the player's output rate (Kodi: output configuration
+  "fixed", 48 kHz) avoids most rate changes.
+
+## Earlier kernel driver
+
+Version 0.1.0 (tag `v0.1.0`) was a kernel driver instead of a plugin: a real ALSA sound card
+`SPDIFout` (usable by `dmix` and any program, keep-alive without a player), at the price of
+a module that fits exactly one kernel and so one LibreELEC version. It is still there under
+that tag, with the zips for LibreELEC 12.2.1, if you need a real card or `dmix`. The plugin
+and the driver must not run together.
+
+## Tools
+
 - `tools/make_rate_signals.py` -- test signals that tell the rates apart by ear (number
   of beeps, then left and right tones)
-- `tools/pause_test.py` -- pause/resume through `snd_pcm_pause`
-- `tools/iec958_status.py` -- reads/sets the channel status control (no `iecset` needed)
 
 ## Credits
 
@@ -223,13 +199,14 @@ the start of a stream then. Fixing the player's output rate (Kodi: output config
   test vectors in `test/` (attributed in `test/bmc_check.c`).
 - [rpi-i2s-spdif](https://github.com/kiffie/rpi-i2s-spdif) by kiffie (GPL-2.0): the first
   kernel driver doing S/PDIF through the I2S block.
-- The register setup follows the kernel's `sound/soc/bcm/bcm2835-i2s.c`.
+- alsa-lib's `pcm_iec958` plugin: it builds the 32-bit S/PDIF sub-frame (channel status,
+  parity) but does no biphase-mark coding, which this plugin adds on top of the same idea.
+- Raspberry Pi engineers on their forum, who suggested this approach.
 
 ## How this was made
 
 The code was written by Claude Code (Anthropic); the commits carry an `Assisted-by:`
-trailer. An independent review by a second model found real issues; those are fixed and re-tested
-on the device.
+trailer. An independent review by a second model found real issues; those are fixed.
 I directed the work, made the design decisions and did the testing on my own Raspberry
 Pi 4 and receiver, but I have not reviewed the code line by line. Please treat it like
 any outside code -- issues and questions are welcome.

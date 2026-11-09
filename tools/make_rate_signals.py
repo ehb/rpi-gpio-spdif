@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Test signals that tell the rates apart by ear (the receiver does not show the rate):
 lead-in silence (receivers are slow to lock after a rate change), N beeps of 440 Hz,
 then 1 s 880 Hz left only and 1 s 660 Hz right only. Raw stereo, S16_LE or S32_LE.
   python make_rate_signals.py outdir [lead_s]
 Writes lead_32000.raw (1 beep), lead_88200.raw (2), lead_96000.raw (3),
-lead_48000_s32.raw (4, S32). Play: aplay -D hw:CARD=SPDIFout -t raw -c 2 -f S16_LE -r 32000 ...
+lead_48000_s32.raw (4, S32). Play: aplay -D hdmi_bmc -t raw -c 2 -f S16_LE -r 32000 ...
 """
 import math
 import os

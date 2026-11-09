@@ -1,0 +1,26 @@
+# Kodi Media Center language file
+# Addon Name: S/PDIF output on GPIO21 (ALSA plugin)
+# Addon id: service.rpi-gpio-spdif
+msgid ""
+msgstr ""
+"Project-Id-Version: service.rpi-gpio-spdif\n"
+"Language: en_GB\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "#30000"
+msgid "Audio"
+msgstr ""
+
+msgctxt "#30001"
+msgid "Output"
+msgstr ""
+
+msgctxt "#30010"
+msgid "Extra buffer (ms)"
+msgstr ""
+
+msgctxt "#30011"
+msgid "Coded silence kept queued ahead of the audio (0 to 500, default 80). It adds the same delay, which Kodi compensates for lip sync. A player that makes an early copy of the audio (alsa-leadtap) needs it as head start. After a change the device is rewritten at once; a device that is playing keeps the old setting until it is opened again."
+msgstr ""

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
 # Print the CHANGELOG.md section of a version; fails if there is none.
 #   ci/release_notes.sh 0.1.0
 set -e

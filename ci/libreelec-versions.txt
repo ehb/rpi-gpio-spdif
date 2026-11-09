@@ -1,6 +1,0 @@
-# LibreELEC versions the add-on is built for, one per line, oldest first. The kernel commit
-# and config are not listed here on purpose: ci/le_kernel.py derives them from the LibreELEC
-# tree of that release. The release workflow builds exactly the versions listed here.
-# Stable releases newer than the last line are picked up by the weekly libreelec-watch
-# workflow, which adds their zips to the newest release.
-12.2.1

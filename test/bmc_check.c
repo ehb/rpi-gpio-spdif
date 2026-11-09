@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Userspace checks of the encoder (driver/spdif_bmc.c):
- *   cc -O2 -Idriver -o bmc_check test/bmc_check.c driver/spdif_bmc.c -lm
+ * Userspace checks of the encoder (src/spdif_bmc.c):
+ *   cc -O2 -Isrc -o bmc_check test/bmc_check.c src/spdif_bmc.c -lm
  *   ./bmc_check test/golden_raspdif.raw
  *
  * 1. Golden vectors: 400 frames encoded by raspdif's own encoder (mill1000/raspdif,
