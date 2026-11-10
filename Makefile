@@ -5,21 +5,21 @@
 # the plugin: it is loaded into a process that already has libasound. Cross build example
 # (headers copied from a target-compatible tree):
 #   make plugin CC=aarch64-linux-gnu-gcc ALSA_INC=/path/to/dir-containing-alsa
-# The device tree overlay (only GPIO21, Pi 0-4) needs dtc: make overlay
+# The device tree overlay (only GPIO21, all Pi models with a 40-pin header) needs dtc: make overlay
 ALSA_INC ?= /usr/include
 BUILD ?= build
 CFLAGS ?= -O2 -g -Wall -Wextra
 DTC ?= dtc
 SO = libasound_module_pcm_spdifbmc.so
-DTBO = spdif-gpio21.dtbo spdif-gpio21-pi5.dtbo
+DTBO = spdif-gpio21.dtbo
 
 all: plugin
 
 plugin: $(BUILD)/$(SO)
 
-overlay: $(addprefix $(BUILD)/,$(DTBO))
+overlay: $(BUILD)/$(DTBO)
 
-$(BUILD)/%.dtbo: overlay/%-overlay.dts
+$(BUILD)/$(DTBO): overlay/spdif-gpio21-overlay.dts
 	mkdir -p $(BUILD)
 	$(DTC) -@ -q -I dts -O dtb -o $@ $<
 

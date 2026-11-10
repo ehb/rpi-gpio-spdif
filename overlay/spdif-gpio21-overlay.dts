@@ -8,16 +8,20 @@
 	compatible = "brcm,bcm2835";
 
 	fragment@0 {
-		target = <&i2s_pins>;
+		target = <&gpio>;
 		__overlay__ {
-			brcm,pins = <21>;
-			brcm,function = <4>; /* ALT0 */
+			spdif_gpio21_pins: spdif_gpio21_pins {
+				brcm,pins = <21>;
+				brcm,function = <4>; /* ALT0: PCM_DOUT, on RP1 i2s0 */
+			};
 		};
 	};
 
 	fragment@1 {
 		target = <&i2s_clk_producer>;
 		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&spdif_gpio21_pins>;
 			status = "okay";
 		};
 	};

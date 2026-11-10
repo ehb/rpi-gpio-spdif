@@ -5,4 +5,4 @@
 set -e
 make test BUILD=build/native CC=gcc CFLAGS="-O2 -g -Wall -Wextra -Werror"
 TS_SO=build/native/libasound_module_pcm_spdifbmc.so TS_SO_A64=build/aarch64/libasound_module_pcm_spdifbmc.so \
-    TS_DTBO=build/overlay/spdif-gpio21.dtbo TS_DTBO_PI5=build/overlay/spdif-gpio21-pi5.dtbo sh test/test_addon.sh
+    TS_DTBO=build/overlay/spdif-gpio21.dtbo sh test/test_addon.sh

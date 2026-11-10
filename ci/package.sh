@@ -8,12 +8,12 @@ VERSION=$2
 OUT=$3
 NAME=rpi-gpio-spdif-$VERSION-$ARCH
 SO=build/$ARCH/libasound_module_pcm_spdifbmc.so
-DTBO="build/overlay/spdif-gpio21.dtbo build/overlay/spdif-gpio21-pi5.dtbo"
+DTBO=build/overlay/spdif-gpio21.dtbo
 [ -f "$SO" ] || { echo "$SO missing: run ci/build.sh $ARCH first" >&2; exit 1; }
-for d in $DTBO; do [ -f "$d" ] || { echo "$d missing: run ci/build.sh overlay first" >&2; exit 1; }; done
+[ -f "$DTBO" ] || { echo "$DTBO missing: run ci/build.sh overlay first" >&2; exit 1; }
 rm -rf "build/$NAME"
 mkdir -p "build/$NAME" "$OUT"
-cp "$SO" $DTBO overlay/*-overlay.dts README.md LICENSE "build/$NAME/"
+cp "$SO" "$DTBO" overlay/spdif-gpio21-overlay.dts README.md LICENSE "build/$NAME/"
 tar czf "$OUT/$NAME.tar.gz" --owner=0 --group=0 -C build "$NAME"
 rm -rf "build/$NAME"
 echo "$OUT/$NAME.tar.gz"

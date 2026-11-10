@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- One overlay for all models: `spdif-gpio21` now adds its own pin group for GPIO21 (the
+  legacy `brcm,pins`/`brcm,function` settings) and points the I2S block at it, instead of
+  rewriting `i2s_pins`. The RP1 pin driver of the Pi 5 maps GPIO21 ALT0 to I2S0, so the
+  separate `spdif-gpio21-pi5` of 0.3.1 is gone (hint from Raspberry Pi). Checked on a Pi 4B
+  (pin 21 owned by the I2S block, 18-20 unclaimed); Pi 5 untested.
+
 ## 0.3.1
 
 - Pi 5 variant of the overlay, `spdif-gpio21-pi5` (RP1 I2S0, GPIO21 only); the add-on picks

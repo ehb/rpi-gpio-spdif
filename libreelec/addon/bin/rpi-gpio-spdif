@@ -1,8 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 # Start/stop helper of the LibreELEC add-on service.rpi-gpio-spdif.
-#   start: apply the add-on's own overlay spdif-gpio21 (only GPIO21, card spdifgpio21; on a Pi 5
-#          its variant spdif-gpio21-pi5, chosen by the device tree's compatible); if it
+#   start: apply the add-on's own overlay spdif-gpio21 (only GPIO21, card spdifgpio21); if it
 #          does not apply or its card does not appear, remove it again and fall back to the
 #          stock overlay hifiberry-dac (card sndrpihifiberry). Then write the ALSA
 #          configuration (device hdmi_bmc, the spdifbmc plugin of this add-on)
@@ -19,7 +18,6 @@ RUN=${SPDIF_RUN:-/run}
 PROC=${SPDIF_PROC:-/proc}
 DTOVERLAY=${SPDIF_DTOVERLAY:-dtoverlay}
 PIDOF=${SPDIF_PIDOF:-pidof}
-DT=${SPDIF_DT:-/proc/device-tree}
 CARD_WAIT=${SPDIF_CARD_WAIT:-6}
 
 CONF=$CONFD/50-rpi-gpio-spdif.conf
@@ -29,14 +27,7 @@ APPLIED=$RUN/$ID.applied
 MARK="# written by $ID"
 PLUGIN=$A/lib/libasound_module_pcm_spdifbmc.so
 OVLDIR=$A/overlays
-# the Pi 5 (BCM2712, I2S on RP1) needs its own variant; the file of the other would apply there
-# (Pi 0-4 one: fails) or apply wrongly (Pi 5 one on a Pi 4: a meaningless pin node)
-if tr '\0' '\n' < "$DT/compatible" 2> /dev/null | grep -qx 'brcm,bcm2712'; then
-  OWN=spdif-gpio21-pi5
-else
-  OWN=spdif-gpio21
-fi
-OWNS="spdif-gpio21 spdif-gpio21-pi5"
+OWN=spdif-gpio21
 OWN_CARD=spdifgpio21
 STOCK=hifiberry-dac
 STOCK_CARD=sndrpihifiberry
@@ -177,7 +168,7 @@ stop() {
   rm -f "$APPLIED" "$CONF.tmp"
   grep -q "^$MARK" "$CONF" 2> /dev/null && rm -f "$CONF"
   rmdir "$CONFD" 2> /dev/null
-  for o in $OWNS; do overlay_applied $o && "$DTOVERLAY" -r $o; done
+  overlay_applied $OWN && "$DTOVERLAY" -r $OWN
   overlay_applied $STOCK && "$DTOVERLAY" -r $STOCK
   return 0
 }
