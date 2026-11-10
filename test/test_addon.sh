@@ -7,15 +7,16 @@
 # system alsa.conf, python3, unzip. Prints "ALL OK" only if every check passes.
 #
 #   TS_SO=<native plugin .so> TS_SO_A64=<aarch64 plugin .so> TS_DTBO=<spdif-gpio21.dtbo> \
-#       sh test/test_addon.sh
+#       TS_DTBO_PI5=<spdif-gpio21-pi5.dtbo> sh test/test_addon.sh
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(dirname "$HERE")
 LE=$ROOT/libreelec
 SCRIPT=$LE/addon/bin/rpi-gpio-spdif
-: "${TS_SO:?set TS_SO}" "${TS_SO_A64:?set TS_SO_A64}" "${TS_DTBO:?set TS_DTBO}"
+: "${TS_SO:?set TS_SO}" "${TS_SO_A64:?set TS_SO_A64}" "${TS_DTBO:?set TS_DTBO}" "${TS_DTBO_PI5:?set TS_DTBO_PI5}"
 TS_SO=$(readlink -f "$TS_SO"); TS_SO_A64=$(readlink -f "$TS_SO_A64"); TS_DTBO=$(readlink -f "$TS_DTBO")
+TS_DTBO_PI5=$(readlink -f "$TS_DTBO_PI5")
 
 T=$(mktemp -d /tmp/spdif-addon.XXXXXX) || exit 1
 cleanup() { rm -rf "$T"; }
@@ -50,10 +51,10 @@ printf '%s\n' \
   'OV=$FAKE_DIR/overlays; touch "$OV"' \
   'case "$1" in' \
   '  -l) if [ -s "$OV" ]; then echo "Overlays (in load order):"; n=0; while read -r o; do echo "$n:  $o"; n=$((n + 1)); done < "$OV"; else echo "No overlays loaded"; fi ;;' \
-  '  -r) grep -vx "$2" "$OV" > "$OV.new"; mv "$OV.new" "$OV"; case "$2" in hifiberry-dac|spdif-gpio21) : > "$FAKE_PROC/asound/cards" ;; esac ;;' \
+  '  -r) grep -vx "$2" "$OV" > "$OV.new"; mv "$OV.new" "$OV"; case "$2" in hifiberry-dac|spdif-gpio21*) : > "$FAKE_PROC/asound/cards" ;; esac ;;' \
   '  -d) [ -f "$2/$3.dtbo" ] && [ ! -e "$FAKE_DIR/ownfail" ] || exit 1' \
   '      echo "$3" >> "$OV"' \
-  '      [ "$3" = spdif-gpio21 ] && [ ! -e "$FAKE_DIR/nocard_own" ] && echo " 0 [spdifgpio21    ]: simple-card - spdif-gpio21" > "$FAKE_PROC/asound/cards" ;;' \
+  '      case "$3" in spdif-gpio21*) [ ! -e "$FAKE_DIR/nocard_own" ] && echo " 0 [spdifgpio21    ]: simple-card - spdif-gpio21" > "$FAKE_PROC/asound/cards" ;; esac ;;' \
   '  *) echo "$1" >> "$OV"; [ "$1" = hifiberry-dac ] && [ ! -e "$FAKE_DIR/nocard" ] && echo " 0 [sndrpihifiberry]: RPi-simple - snd_rpi_hifiberry_dac" > "$FAKE_PROC/asound/cards" ;;' \
   'esac' \
   'exit 0' > "$T/dtoverlay"
@@ -61,7 +62,13 @@ printf '%s\n' '#!/bin/sh' '[ -e "$FAKE_DIR/raspdif-running" ]' > "$T/pidof"
 chmod +x "$T/dtoverlay" "$T/pidof"
 export FAKE_DIR=$T FAKE_PROC=$PROC
 export SPDIF_ADDON=$A SPDIF_SETTINGS=$D/settings.xml SPDIF_CONFD=$CONFD SPDIF_RUN=$RUN \
-       SPDIF_PROC=$PROC SPDIF_DTOVERLAY=$T/dtoverlay SPDIF_PIDOF=$T/pidof SPDIF_CARD_WAIT=1
+       SPDIF_PROC=$PROC SPDIF_DTOVERLAY=$T/dtoverlay SPDIF_PIDOF=$T/pidof SPDIF_CARD_WAIT=1 \
+       SPDIF_DT=$T/dt
+# the model as the device tree names it: NUL-separated compatible strings (Pi 4 unless a
+# check switches to Pi 5)
+mkdir -p "$T/dt"
+model() { printf '%s\0brcm,%s\0' "$1" "$2" > "$T/dt/compatible"; }
+model raspberrypi,4-model-b bcm2711
 S="sh $A/bin/rpi-gpio-spdif"
 CONF=$CONFD/50-rpi-gpio-spdif.conf
 STATUS=$RUN/service.rpi-gpio-spdif.status
@@ -314,6 +321,7 @@ check "unknown command is a usage error" sh -c "! $S bogus"
 # ---- own overlay spdif-gpio21 and the fallback to hifiberry-dac -------------------------
 mkdir -p "$A/overlays"
 cp "$TS_DTBO" "$A/overlays/spdif-gpio21.dtbo"
+cp "$TS_DTBO_PI5" "$A/overlays/spdif-gpio21-pi5.dtbo"
 reset_world
 $S start > "$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && ok "own overlay: start" || { bad "own overlay: start (rc $rc)"; cat "$T/out"; }
@@ -331,7 +339,7 @@ nocheck "own overlay: stop removes the conf.d file" test -e "$CONF"
 reset_world
 touch "$T/ownfail"
 $S start > "$T/out" 2>&1; rc=$?
-[ $rc = 0 ] && ok "own overlay does not apply (e.g. Pi 5): start succeeds" || { bad "own overlay does not apply: start succeeds (rc $rc)"; cat "$T/out"; }
+[ $rc = 0 ] && ok "own overlay does not apply (e.g. a base tree without the labels): start succeeds" || { bad "own overlay does not apply: start succeeds (rc $rc)"; cat "$T/out"; }
 check "  ... falls back to hifiberry-dac" has 'slave.pcm "hw:CARD=sndrpihifiberry"' "$CONF"
 check "  ... says why and that it falls back" sh -c "grep -q 'applying the overlay spdif-gpio21 failed' '$T/out' && grep -q 'falling back to the stock overlay hifiberry-dac' '$T/out'"
 nocheck "  ... no status (it is not an error)" test -e "$STATUS"
@@ -367,18 +375,45 @@ printf 'rpi_gpio_spdif 20480 0 - Live 0x0\n' > "$PROC/modules"
 $S start > "$T/out" 2>&1
 nocheck "kernel driver loaded: the own overlay is not applied either" grep -q spdif-gpio21 "$T/dt.log"
 rm -f "$STATUS"
+
+# Pi 5: the variant with the RP1 pins, never the Pi 0-4 file (and the other way round)
+reset_world
+nocheck "Pi 4: the Pi 5 variant is not applied" grep -q spdif-gpio21-pi5 "$T/dt.log"
+model raspberrypi,5-model-b bcm2712
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && ok "Pi 5: start" || { bad "Pi 5: start (rc $rc)"; cat "$T/out"; }
+check "Pi 5: the -pi5 variant is applied" grep -qx -- "-d $A/overlays spdif-gpio21-pi5" "$T/dt.log"
+nocheck "Pi 5: the Pi 0-4 overlay is not tried" grep -qx -- "-d $A/overlays spdif-gpio21" "$T/dt.log"
+check "Pi 5: slave is the card spdifgpio21" has 'slave.pcm "hw:CARD=spdifgpio21"' "$CONF"
+$S stop
+nocheck "Pi 5: stop removes the variant" grep -qx spdif-gpio21-pi5 "$T/overlays"
+reset_world
+touch "$T/ownfail"
+$S start > "$T/out" 2>&1; rc=$?
+check "Pi 5: variant fails -> hifiberry-dac" has 'slave.pcm "hw:CARD=sndrpihifiberry"' "$CONF"
+$S stop
+model raspberrypi,4-model-b bcm2711
+rm -f "$T/dt/compatible"
+reset_world
+$S start > "$T/out" 2>&1
+check "no device tree compatible (not a Pi): the Pi 0-4 overlay" grep -qx -- "-d $A/overlays spdif-gpio21" "$T/dt.log"
+$S stop
+model raspberrypi,4-model-b bcm2711
 rm -rf "$A/overlays"
 reset_world
 
 # ---- build_addon.py ---------------------------------------------------------------------
-B="python3 $LE/build_addon.py --out $T/out-zip --dtbo $TS_DTBO"
+B="python3 $LE/build_addon.py --out $T/out-zip --dtbo $TS_DTBO $TS_DTBO_PI5"
 $B --so "$TS_SO" > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && grep -q AArch64 "$T/b.out" && ok "wrong architecture refused" || bad "wrong architecture refused"
 printf 'not an elf' > "$T/junk.bin"
 $B --so "$T/junk.bin" > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && grep -q 'not an ELF' "$T/b.out" && ok "non-ELF refused" || bad "non-ELF refused"
-python3 "$LE/build_addon.py" --out "$T/out-zip" --so "$TS_SO_A64" --dtbo "$T/junk.bin" > "$T/b.out" 2>&1; rc=$?
+mkdir -p "$T/junkd"; cp "$T/junk.bin" "$T/junkd/spdif-gpio21.dtbo"
+python3 "$LE/build_addon.py" --out "$T/out-zip" --so "$TS_SO_A64" --dtbo "$T/junkd/spdif-gpio21.dtbo" "$TS_DTBO_PI5" > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && grep -q 'not a device tree blob' "$T/b.out" && ok "non-dtbo overlay refused" || bad "non-dtbo overlay refused"
+python3 "$LE/build_addon.py" --out "$T/out-zip" --so "$TS_SO_A64" --dtbo "$TS_DTBO" > "$T/b.out" 2>&1; rc=$?
+[ $rc != 0 ] && grep -q 'needs exactly' "$T/b.out" && ok "the Pi 5 overlay is required" || bad "the Pi 5 overlay is required"
 python3 "$LE/build_addon.py" --out "$T/out-zip" --so "$TS_SO_A64" > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && ok "--dtbo is required" || bad "--dtbo is required"
 nocheck "no zip after refusals" test -e "$T/out-zip"
@@ -391,7 +426,8 @@ check "zip named after id and version" test -f "$Z"
 mkdir -p "$T/unz"; unzip -q -o "$Z" -d "$T/unz" 2> /dev/null
 P=$T/unz/service.rpi-gpio-spdif
 for f in addon.xml default.py LICENSE.txt bin/rpi-gpio-spdif lib/libasound_module_pcm_spdifbmc.so \
-         overlays/spdif-gpio21.dtbo system.d/service.rpi-gpio-spdif.service resources/settings.xml \
+         overlays/spdif-gpio21.dtbo overlays/spdif-gpio21-pi5.dtbo \
+         system.d/service.rpi-gpio-spdif.service resources/settings.xml \
          resources/language/resource.language.en_gb/strings.po; do
   check "zip has $f" test -f "$P/$f"
 done
@@ -404,6 +440,7 @@ m = {i.filename.split('/', 1)[1]: (i.external_attr >> 16) & 0o111 for i in z.inf
 sys.exit(0 if m['bin/rpi-gpio-spdif'] and not m['default.py'] and not m['lib/libasound_module_pcm_spdifbmc.so'] else 1)" "$Z"
 check "zip: plugin is the aarch64 one" cmp "$P/lib/libasound_module_pcm_spdifbmc.so" "$TS_SO_A64"
 check "zip: overlay is the one built" cmp "$P/overlays/spdif-gpio21.dtbo" "$TS_DTBO"
+check "zip: Pi 5 overlay is the one built" cmp "$P/overlays/spdif-gpio21-pi5.dtbo" "$TS_DTBO_PI5"
 check "zip: script is the one under test" cmp "$P/bin/rpi-gpio-spdif" "$SCRIPT"
 $B --so "$TS_SO_A64" > "$T/b.out" 2>&1
 CLV=$(sed -n 's/^## \([0-9][0-9.]*\)$/\1/p' "$ROOT/CHANGELOG.md" | head -n 1)

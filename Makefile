@@ -11,15 +11,15 @@ BUILD ?= build
 CFLAGS ?= -O2 -g -Wall -Wextra
 DTC ?= dtc
 SO = libasound_module_pcm_spdifbmc.so
-DTBO = spdif-gpio21.dtbo
+DTBO = spdif-gpio21.dtbo spdif-gpio21-pi5.dtbo
 
 all: plugin
 
 plugin: $(BUILD)/$(SO)
 
-overlay: $(BUILD)/$(DTBO)
+overlay: $(addprefix $(BUILD)/,$(DTBO))
 
-$(BUILD)/$(DTBO): overlay/spdif-gpio21-overlay.dts
+$(BUILD)/%.dtbo: overlay/%-overlay.dts
 	mkdir -p $(BUILD)
 	$(DTC) -@ -q -I dts -O dtb -o $@ $<
 

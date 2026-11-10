@@ -19,9 +19,10 @@ only the biphase-mark coding.
 
 Hardware scope: Raspberry Pi 0-4 (BCM2835 to BCM2711), tested only on one Pi 4B. The
 Pi 5 is untested: the plugin does not touch the hardware, and according to a Raspberry Pi
-engineer its I2S block should do the job, but the overlay of this project is for Pi 0-4 only
-(on a Pi 5 the add-on falls back to `hifiberry-dac`); reports are welcome. The ready-made add-on is for 64-bit systems
-(aarch64); the plugin tarball is also built for armhf (untested).
+engineer the RP1's I2S block should do the job. There is a Pi 5 variant of the overlay
+(`spdif-gpio21-pi5`, RP1 I2S0 on GPIO21), checked only by applying it to the Pi 5 base device
+tree, never run; the add-on picks it on a Pi 5. Reports are welcome. The ready-made add-on is
+for 64-bit systems (aarch64); the plugin tarball is also built for armhf (untested).
 
 ## Hardware
 
@@ -71,7 +72,7 @@ case.
 
 **Restart Kodi once after the first install:** a running Kodi does not see the new audio
 device. The add-on then applies its overlay `spdif-gpio21` (only GPIO21, sound card
-`spdifgpio21`) when Kodi's services start; where that overlay does not apply or the card
+`spdifgpio21`; on a Pi 5 `spdif-gpio21-pi5`) when Kodi's services start; where that overlay does not apply or the card
 does not appear, it removes it again and uses the stock overlay `hifiberry-dac` instead
 (card `sndrpihifiberry`, all four I2S pins). It waits for the sound card and writes the
 ALSA configuration to
@@ -92,9 +93,10 @@ the device for HDMI and offers them, but they do not fit through S/PDIF.
 
 **Other systems (Raspberry Pi OS, ...).** Take `rpi-gpio-spdif-<version>-aarch64.tar.gz` (or
 `-armhf`) from the Releases page, put the library somewhere persistent, copy
-`spdif-gpio21.dtbo` from the tarball to the overlays directory of the boot partition
-(`/boot/firmware/overlays/`), add `dtoverlay=spdif-gpio21` to `config.txt` (or
-`dtoverlay=hifiberry-dac`, then the card is `sndrpihifiberry`), and define the device in
+`spdif-gpio21.dtbo` (on a Pi 5 `spdif-gpio21-pi5.dtbo`) from the tarball to the overlays
+directory of the boot partition (`/boot/firmware/overlays/`), add `dtoverlay=spdif-gpio21`
+(Pi 5: `dtoverlay=spdif-gpio21-pi5`) to `config.txt` (or `dtoverlay=hifiberry-dac`, then the
+card is `sndrpihifiberry`), and define the device in
 `/etc/asound.conf`. This path has not been run; it is the same configuration the add-on
 writes:
 
@@ -155,8 +157,9 @@ The overlay `spdif-gpio21` (`overlay/spdif-gpio21-overlay.dts`) makes that drive
 sound card from parts that ship with the Pi kernel: `simple-audio-card` with the generic
 S/PDIF transmitter codec `linux,spdif-dit` (accepts S32_LE up to 768 kHz), the Pi as clock
 producer with two 32-bit slots per frame, and only GPIO21 switched to PCM_DOUT; GPIO18-20
-stay free. The stock overlay `hifiberry-dac` (a DAC chip's configuration, all four pins)
-works as well and is the fallback.
+stay free. `overlay/spdif-gpio21-pi5-overlay.dts` does the same with the RP1's I2S0 on a
+Pi 5 (untested). The stock overlay `hifiberry-dac` (a DAC chip's configuration, all four
+pins) works as well and is the fallback.
 
 In front of the card, alsa-lib's `iec958` plugin turns the application's PCM into IEC 60958
 sub-frames (`IEC958_SUBFRAME_LE`): preamble marks, 24-bit sample, validity, user bit, the
@@ -209,7 +212,8 @@ Not tested: other Pi models, Raspberry Pi OS, armhf, other receivers, hours-long
   names starting with `iec958`, `spdif` or `hdmi`.
 - **96 kHz with aplay's default large buffer fails** (hw_params refuse the period); Kodi
   does not hit this.
-- Pi 0-4 family by design, but tested only on one Pi 4B. Pi 5 untested.
+- Pi 0-4 family by design, but tested only on one Pi 4B. The Pi 5 variant is untested: it
+  was only checked by applying it to the Pi 5 base device tree.
 - The 3.3 V GPIO level and the TOSLINK module are your responsibility; see Hardware.
 - Receivers can take a second or two to lock after a sample-rate change and may swallow
   the start of a stream then. Fixing the player's output rate (Kodi: output configuration

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- Pi 5 variant of the overlay, `spdif-gpio21-pi5` (RP1 I2S0, GPIO21 only); the add-on picks
+  it by the device tree's compatible (`brcm,bcm2712`). Untested: checked only by applying it
+  to the Pi 5 base device tree.
+- Overlay prepared for the Raspberry Pi kernel: the Pi as bit and frame clock producer is now
+  stated explicitly (before it came from simple-audio-card's fallback, same result), SPDX
+  line, the unused `i2s-controller` property is gone. Checked on a Pi 4B.
+- The release tarballs contain both overlays.
+
 ## 0.3.0
 
 - alsa-lib's `iec958` plugin now builds the S/PDIF sub-frames, the channel status and the

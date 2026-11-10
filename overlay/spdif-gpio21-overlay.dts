@@ -1,7 +1,6 @@
-// S/PDIF output on GPIO21 (PCM_DOUT) without a transceiver: the I2S block runs as clock
-// producer with 2 x 32-bit slots and sends data that software has already biphase-mark
-// coded (one S/PDIF subframe per 32-bit slot, at twice the audio sample rate). Only GPIO21
-// is claimed; GPIO18-20 stay free. The codec is the generic linux,spdif-dit stub.
+// SPDX-License-Identifier: GPL-2.0
+// S/PDIF transmitter on GPIO21 (PCM_DOUT) without a transceiver: the I2S block is the clock
+// producer; software supplies the biphase-mark coded bitstream. Only GPIO21 is claimed.
 /dts-v1/;
 /plugin/;
 
@@ -38,13 +37,14 @@
 		target = <&sound>;
 		__overlay__ {
 			compatible = "simple-audio-card";
-			i2s-controller = <&i2s_clk_producer>;
 			status = "okay";
 
 			simple-audio-card,name = "spdif-gpio21";
 			simple-audio-card,format = "i2s";
+			simple-audio-card,bitclock-master = <&dailink0_cpu>;
+			simple-audio-card,frame-master = <&dailink0_cpu>;
 
-			simple-audio-card,cpu {
+			dailink0_cpu: simple-audio-card,cpu {
 				sound-dai = <&i2s_clk_producer>;
 				dai-tdm-slot-num = <2>;
 				dai-tdm-slot-width = <32>;

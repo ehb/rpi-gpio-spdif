@@ -2,16 +2,17 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Package the LibreELEC add-on service.rpi-gpio-spdif as an installable zip.
 
-The add-on holds the aarch64 spdifbmc plugin, the device tree overlay spdif-gpio21 (only
-GPIO21), a start/stop script, a systemd unit and the settings. It is tied to the
-architecture, not to a kernel or LibreELEC version.
+The add-on holds the aarch64 spdifbmc plugin, the device tree overlays spdif-gpio21 and
+spdif-gpio21-pi5 (only GPIO21), a start/stop script, a systemd unit and the settings. It is
+tied to the architecture, not to a kernel or LibreELEC version.
 Version: --version, else the newest entry of CHANGELOG.md.
 
   python libreelec/build_addon.py --so build/aarch64/libasound_module_pcm_spdifbmc.so \\
-      --dtbo build/overlay/spdif-gpio21.dtbo [--version 0.2.0] [--out build]
+      --dtbo build/overlay/spdif-gpio21.dtbo build/overlay/spdif-gpio21-pi5.dtbo \\
+      [--version 0.2.0] [--out build]
 
-The plugin is checked for ELF class 64-bit, little endian, machine AArch64; the overlay for
-the flattened device tree magic.
+The plugin is checked for ELF class 64-bit, little endian, machine AArch64; the overlays for
+the flattened device tree magic and their names.
 """
 import argparse
 import os
@@ -25,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ADDON = os.path.join(HERE, "addon")
 EM_AARCH64 = 183
+OVERLAYS = ["spdif-gpio21.dtbo", "spdif-gpio21-pi5.dtbo"]
 
 
 def elf_problem(path):
@@ -66,7 +68,7 @@ def read(*parts):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--so", required=True, help="aarch64 libasound_module_pcm_spdifbmc.so")
-    ap.add_argument("--dtbo", required=True, help="spdif-gpio21.dtbo (make overlay)")
+    ap.add_argument("--dtbo", required=True, nargs="+", help=" ".join(OVERLAYS) + " (make overlay)")
     ap.add_argument("--version", help="add-on version x.y.z (default: CHANGELOG.md)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build"))
     a = ap.parse_args()
@@ -76,11 +78,14 @@ def main():
     why = elf_problem(a.so)
     if why:
         sys.exit("--so %s: %s -- this add-on is for 64-bit Raspberry Pi (aarch64) only" % (a.so, why))
-    if not os.path.isfile(a.dtbo):
-        sys.exit("--dtbo: no such file: %s" % a.dtbo)
-    why = dtb_problem(a.dtbo)
-    if why:
-        sys.exit("--dtbo %s: %s" % (a.dtbo, why))
+    if sorted(os.path.basename(d) for d in a.dtbo) != sorted(OVERLAYS):
+        sys.exit("--dtbo needs exactly " + " and ".join(OVERLAYS))
+    for d in a.dtbo:
+        if not os.path.isfile(d):
+            sys.exit("--dtbo: no such file: %s" % d)
+        why = dtb_problem(d)
+        if why:
+            sys.exit("--dtbo %s: %s" % (d, why))
     version = a.version or changelog_version()
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         sys.exit("version %r is not x.y.z" % version)
@@ -93,7 +98,7 @@ def main():
         ("LICENSE.txt", read(ROOT, "LICENSE"), False),
         ("bin/rpi-gpio-spdif", read(ADDON, "bin", "rpi-gpio-spdif"), True),
         ("lib/libasound_module_pcm_spdifbmc.so", read(a.so), False),
-        ("overlays/spdif-gpio21.dtbo", read(a.dtbo), False),
+    ] + [("overlays/" + os.path.basename(d), read(d), False) for d in sorted(a.dtbo)] + [
         ("system.d/%s.service" % ID, read(ADDON, "system.d", ID + ".service"), False),
         ("resources/settings.xml", read(ADDON, "resources", "settings.xml"), False),
         ("resources/language/resource.language.en_gb/strings.po",
