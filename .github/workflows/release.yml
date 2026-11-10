@@ -22,6 +22,7 @@ jobs:
       - run: sh ci/build.sh native
       - run: sh ci/build.sh aarch64
       - run: sh ci/build.sh armhf
+      - run: sh ci/build.sh overlay
       - run: sh ci/test.sh
       - name: Pack and build the add-on zip
         env:
@@ -32,7 +33,7 @@ jobs:
             sh ci/package.sh "$arch" "${TAG#v}" dist
           done
           python3 libreelec/build_addon.py --so build/aarch64/libasound_module_pcm_spdifbmc.so \
-              --version "${TAG#v}" --out dist
+              --dtbo build/overlay/spdif-gpio21.dtbo --version "${TAG#v}" --out dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin

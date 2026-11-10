@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Selftest of the spdifbmc plugin without audio hardware: plays a signal into a file slave and
-decodes what the plugin wrote like a receiver would.
+"""Selftest of the spdifbmc plugin without audio hardware: plays a signal through alsa-lib's
+iec958 plugin and spdifbmc into a file slave and decodes what was written like a receiver
+would.
 
     python3 test_plugin.py /path/to/libasound_module_pcm_spdifbmc.so
-
-With a C compiler it also builds shortwrite.c, a shim that makes the slave take short writes,
-and plays through it.
 """
 import math
 import os
-import shutil
 import struct
 import subprocess
 import sys
@@ -23,6 +20,7 @@ import bmc_decode as bmc
 so = sys.argv[1]
 
 FAILS = 0
+FS = {32000: 3, 44100: 0, 48000: 2, 88200: 8, 96000: 10}
 
 
 def check(name, ok, detail=""):
@@ -31,14 +29,26 @@ def check(name, ok, detail=""):
     FAILS += 0 if ok else 1
 
 
-def run(rate, fmt, nonaudio, aes="", ems=0, shim=None):
+def byte(bits, i):
+    return sum(bits[i * 8 + j] << j for j in range(8))
+
+
+def run(rate, fmt, status, ems=0, device="bmc"):
+    """status: the four channel status bytes for iec958 (a rate of 1 = "not indicated" is
+    filled in by iec958). device: what aplay opens (bmc, or bmc:A,B,C,D for @args)."""
     d = tempfile.mkdtemp()
     out = os.path.join(d, "out.raw")
     conf = os.path.join(d, "asound.conf")
     with open(conf, "w", encoding="ascii") as f:
         f.write('</usr/share/alsa/alsa.conf>\npcm_type.spdifbmc { lib "%s" }\n' % so)
         f.write('pcm.sink { type file slave.pcm "null" file "%s" format "raw" }\n' % out)
-        f.write('pcm.bmc { type spdifbmc slave.pcm "sink" nonaudio %s %s }\n' % ("false" if aes else ("true" if nonaudio else "false"), aes + " extra_ms %d" % ems))
+        f.write('pcm.coder { type spdifbmc slave.pcm "sink" extra_ms %d }\n' % ems)
+        f.write('pcm.bmc { @args [ A0 A1 A2 A3 ]\n')
+        for i, v in enumerate(status):
+            f.write('  @args.A%d { type integer default %d }\n' % (i, v))
+        f.write('  type iec958 slave { pcm "coder" format IEC958_SUBFRAME_LE } status [ $A0 $A1 $A2 $A3 ] }\n')
+    if device != "bmc":
+        status = [int(x) for x in device.split(":")[1].split(",")]
     n = rate // 4
     want = [(int(12000 * math.sin(2 * math.pi * 997 * i / rate)), int(-9000 * math.sin(2 * math.pi * 440 * i / rate)) ) for i in range(n)]
     raw = os.path.join(d, "in.raw")
@@ -48,11 +58,9 @@ def run(rate, fmt, nonaudio, aes="", ems=0, shim=None):
         else:
             f.write(b"".join(struct.pack("<ii", l << 16, r << 16) for l, r in want))
     env = dict(os.environ, ALSA_CONFIG_PATH=conf)
-    if shim:
-        env.update(LD_PRELOAD=shim[0], **shim[1])
-    r = subprocess.run(["aplay", "-q", "-D", "bmc", "-t", "raw", "-f", fmt, "-c", "2", "-r", str(rate), raw],
+    r = subprocess.run(["aplay", "-q", "-D", device, "-t", "raw", "-f", fmt, "-c", "2", "-r", str(rate), raw],
                        env=env, capture_output=True, text=True, timeout=30)
-    name = "%d %s%s%s" % (rate, fmt, " non-audio" if nonaudio else "", " " + shim[2] if shim else "")
+    name = "%d %s status %s%s" % (rate, fmt, ",".join("%d" % v for v in status), " lead %d ms" % ems if ems else "")
     check(name + ": aplay", r.returncode == 0, r.stderr[-300:])
     data = open(out, "rb").read() if os.path.exists(out) else b""
     # aplay pads the last period with silence
@@ -60,34 +68,32 @@ def run(rate, fmt, nonaudio, aes="", ems=0, shim=None):
     got, csa, csb, errors = bmc.decode(data)
     check(name + ": decodes without errors", not errors, errors[:3])
     pairs = [(a, b) for a, b, _ in got]
-    skip = rate * ems // 1000
+    skip = (rate * ems // 1000 + 191) // 192 * 192  # lead silence in whole blocks
     check(name + ": leading silence", not any(a or b for a, b in pairs[:skip]))
-    pairs = pairs[skip:]
-    check(name + ": samples", pairs[:n] == want and not any(a or b for a, b in pairs[n:]), (pairs[:2], want[:2]))
-    check(name + ": block start every 192", [i for i, (_, _, k) in enumerate(got) if k == "B"][:3] == [0, 192, 384])
-    byte = lambda bits, i: sum(bits[i * 8 + j] << j for j in range(8))
-    check(name + ": non-audio bit", bool(byte(csa, 0) & 2) == nonaudio, byte(csa, 0))
-    fs = {32000: 3, 44100: 0, 48000: 2, 88200: 8, 96000: 10}[rate]
-    check(name + ": sample rate in the status", byte(csa, 3) & 15 == fs, byte(csa, 3))
-    check(name + ": channel numbers", (byte(csa, 2) >> 4, byte(csb, 2) >> 4) == (1, 2))
+    check(name + ": samples", pairs[skip:skip + n] == want and not any(a or b for a, b in pairs[skip + n:]),
+          (pairs[skip:skip + 2], want[:2]))
+    starts = [i for i, (_, _, k) in enumerate(got) if k == "B"]
+    check(name + ": block start every 192", starts[:3] == [0, 192, 384] and all(b - a == 192 for a, b in zip(starts, starts[1:])),
+          starts[:6])
+    fs = FS[rate]
+    if skip:
+        lead = [byte(csa[:192], i) for i in range(4)]
+        check(name + ": lead silence status: PCM, rate", lead == [0x04, 0x82, 0x00, fs], lead)
+    a, b = csa[skip:skip + 192], csb[skip:skip + 192]
+    got_cs = [byte(a, i) for i in range(4)]
+    check(name + ": status bytes 0..3 from iec958", got_cs ==
+          [status[0], status[1], status[2], (status[3] & ~15) | fs if status[3] & 15 == 1 else status[3]], got_cs)
+    check(name + ": same status on both sub-frames", a == b)
 
 
+PCM = [0x04, 0x82, 0x00, 0x01]  # consumer PCM, rate filled in by iec958
 for rate in (32000, 44100, 48000, 88200, 96000):
-    run(rate, "S16_LE", False)
-run(48000, "S32_LE", False)
-run(48000, "S16_LE", True)
-run(48000, "S16_LE", True, "aes0 6 aes1 130 aes2 0 aes3 2")
-run(44100, "S16_LE", False, "", 80)
-cc = shutil.which("cc") or shutil.which("gcc")
-if cc:
-    lib = os.path.join(tempfile.mkdtemp(), "shortwrite.so")
-    r = subprocess.run([cc, "-O2", "-fPIC", "-shared", os.path.join(here, "shortwrite.c"), "-o", lib, "-ldl"],
-                       capture_output=True, text=True)
-    check("build shortwrite shim", r.returncode == 0, r.stderr[-300:])
-    run(48000, "S16_LE", False, "", 0, (lib, {}, "short writes"))
-    run(44100, "S16_LE", False, "", 80, (lib, {}, "short writes, lead"))
-    run(48000, "S16_LE", False, "", 0, (lib, {"SHORT_EAGAIN": "1"}, "short writes, refused"))
-else:
-    print("skip short-write tests: no C compiler")
+    run(rate, "S16_LE", PCM)
+run(96000, "S32_LE", PCM)
+run(48000, "S16_LE", [0x06, 0x82, 0x00, 0x02])            # Kodi's passthrough status
+run(48000, "S16_LE", PCM, 0, "bmc:6,130,0,2")         # the same, passed as arguments
+run(44100, "S16_LE", PCM, 80)
+run(48000, "S16_LE", PCM, 80)
+run(96000, "S16_LE", PCM, 80)
 print("\nALL OK" if not FAILS else "\n%d FAILED" % FAILS)
 sys.exit(1 if FAILS else 0)

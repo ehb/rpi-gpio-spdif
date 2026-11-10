@@ -6,10 +6,12 @@
  *
  * 1. Golden vectors: 400 frames encoded by raspdif's own encoder (mill1000/raspdif,
  *    source/spdif.c, run on a Raspberry Pi; test/golden_raspdif.raw, transmit order,
- *    little-endian 32-bit words) must come out byte-identical.
- * 2. A straightforward reference encoder (explicit even parity, no silence table,
- *    status switched only at block starts) against the optimised one, for random
- *    24-bit frames, silence and status changes.
+ *    little-endian 32-bit words) must come out byte-identical. The sub-frames are built
+ *    here the way alsa-lib's iec958 plugin builds them (iec958_subframe), with raspdif's
+ *    channel status.
+ * 2. A straightforward reference encoder (explicit even parity) against the optimised
+ *    one, for random sub-frames: any data, V, U, C, a wrong parity bit, and junk in the
+ *    mark bits of the second sub-frame.
  * Exit code 0 only if both pass.
  *
  * The nibble table below (nib[]) and test/golden_raspdif.raw come from raspdif
@@ -26,74 +28,60 @@
 static const unsigned char nib[16] = { 0xCC, 0xCD, 0xCB, 0xCA, 0xD3, 0xD2, 0xD4, 0xD5,
 				       0xB3, 0xB2, 0xB4, 0xB5, 0xAC, 0xAD, 0xAB, 0xAA };
 
-static u32 rev32(u32 x)
+static uint32_t rev32(uint32_t x)
 {
-	u32 r = 0;
+	uint32_t r = 0;
 
 	for (int i = 0; i < 32; i++, x >>= 1)
 		r = (r << 1) | (x & 1);
 	return r;
 }
 
-/* raspdif's spdif_build_subframe/spdif_encode_biphase_mark, written out plainly */
-static u64 ref_subframe(u8 pre, s32 sample, unsigned int cbit)
+/* raspdif's spdif_encode_biphase_mark, written out plainly, with explicit even parity */
+static uint64_t ref_code(uint8_t pre, uint32_t raw)
 {
-	u32 s24 = ((u32)sample >> 8) & 0xffffff;
-	u32 raw = (s24 & 0xf) << 4 | (s24 >> 4) << 8 | (cbit & 1) << 30;
-	u8 b[8];
-	u64 c = 0;
-	u32 data;
+	uint8_t b[8];
+	uint64_t c = 0;
+	uint32_t data;
 
-	raw |= (u32)(__builtin_popcount(raw) & 1) << 31;
+	raw &= 0x7ffffff0;
+	raw |= (uint32_t)(__builtin_popcount(raw) & 1) << 31;
 	data = rev32(raw);
 	b[7] = pre;
 	b[6] = nib[(data >> 24) & 0xf];
 	for (int i = 5; i >= 0; i--)
-		b[i] = nib[(data >> (4 * i)) & 0xf] ^ (u8)-(b[i + 1] & 1);
+		b[i] = nib[(data >> (4 * i)) & 0xf] ^ (uint8_t)-(b[i + 1] & 1);
 	for (int i = 7; i >= 0; i--)
 		c = c << 8 | b[i];
 	return c;
 }
 
-struct ref {
-	u8 a[24], b[24], na[24], nb[24];
-	int pending;
-	unsigned int f;
-};
-
-static void ref_status(struct ref *r, const u8 *cs)
+static void ref_encode(uint32_t *out, uint32_t a, uint32_t b)
 {
-	memcpy(r->na, cs, 24);
-	memcpy(r->nb, cs, 24);
-	if ((cs[2] >> 4) == 1)
-		r->nb[2] = (cs[2] & 0x0f) | 0x20;
-	r->pending = 1;
+	uint64_t ca = ref_code((a & 0xf) == SPDIF_BMC_MARK_B ? 0xE8 : 0xE2, a);
+	uint64_t cb = ref_code(0xE4, b);
+
+	out[0] = ca >> 32;
+	out[1] = (uint32_t)ca;
+	out[2] = cb >> 32;
+	out[3] = (uint32_t)cb;
 }
 
-static void ref_encode(struct ref *r, u32 *out, s32 l, s32 rr)
+/* like alsa-lib's iec958_subframe: mark, top 24 bits of the sample in bits 4..27, C, P */
+static uint32_t iec_subframe(uint32_t mark, int32_t sample, unsigned int cbit)
 {
-	u64 a, b;
+	uint32_t data = ((uint32_t)sample >> 4) & ~(uint32_t)0xf;
 
-	if (r->f == 0 && r->pending) {
-		memcpy(r->a, r->na, 24);
-		memcpy(r->b, r->nb, 24);
-		r->pending = 0;
-	}
-	a = ref_subframe(r->f ? 0xE2 : 0xE8, l, (r->a[r->f / 8] >> (r->f % 8)) & 1);
-	b = ref_subframe(0xE4, rr, (r->b[r->f / 8] >> (r->f % 8)) & 1);
-	out[0] = a >> 32;
-	out[1] = (u32)a;
-	out[2] = b >> 32;
-	out[3] = (u32)b;
-	r->f = (r->f + 1) % 192;
+	data |= (uint32_t)(cbit & 1) << 30;
+	data |= (uint32_t)(__builtin_popcount(data) & 1) << 31;
+	return data | mark;
 }
 
 static int golden(const char *path)
 {
 	static unsigned char want[400 * 16];
-	u8 cs[SPDIF_BMC_STATUS_BYTES] = { 0 };
-	struct spdif_bmc e;
-	u32 w[SPDIF_BMC_WORDS];
+	uint8_t csa[24] = { 0 }, csb[24];
+	uint32_t w[SPDIF_BMC_WORDS];
 	long bad = 0;
 	FILE *f = fopen(path, "rb");
 
@@ -102,19 +90,22 @@ static int golden(const char *path)
 		return 1;
 	}
 	fclose(f);
-	cs[0] = 0x04;	/* consumer, PCM, copy permitted (as raspdif) */
-	cs[2] = 0x10;	/* channel 1 (B gets 2) */
-	cs[3] = 0x01;	/* sample rate not indicated */
-	spdif_bmc_init(&e);
-	spdif_bmc_set_status(&e, cs);
+	csa[0] = 0x04;	/* consumer, PCM, copy permitted (as raspdif) */
+	csa[2] = 0x10;	/* channel 1 */
+	csa[3] = 0x01;	/* sample rate not indicated */
+	memcpy(csb, csa, sizeof(csb));
+	csb[2] = 0x20;	/* channel 2 */
 	for (int n = 0; n < 400; n++) {
 		int l = (int)(12000 * sin(n / 7.0)), r = -(int)(9000 * sin(n / 11.0));
+		unsigned int fr = n % SPDIF_BMC_BLOCK;
 
 		if (n == 5) {
 			l = -32768;
 			r = 32767;
 		}
-		spdif_bmc_encode(&e, w, (s32)((u32)l << 16), (s32)((u32)r << 16));
+		spdif_bmc_encode_subframes(w,
+			iec_subframe(fr ? SPDIF_BMC_MARK_M : SPDIF_BMC_MARK_B, (int32_t)((uint32_t)l << 16), csa[fr / 8] >> (fr % 8)),
+			iec_subframe(SPDIF_BMC_MARK_W, (int32_t)((uint32_t)r << 16), csb[fr / 8] >> (fr % 8)));
 		/* the file holds little-endian words */
 		for (int i = 0; i < SPDIF_BMC_WORDS; i++)
 			for (int k = 0; k < 4; k++)
@@ -128,39 +119,17 @@ static int golden(const char *path)
 
 static int random_vs_reference(void)
 {
-	u8 cs[SPDIF_BMC_STATUS_BYTES];
-	u32 w[SPDIF_BMC_WORDS], rw[SPDIF_BMC_WORDS];
-	struct spdif_bmc e;
-	struct ref ref;
+	uint32_t w[SPDIF_BMC_WORDS], rw[SPDIF_BMC_WORDS];
 	long bad = 0, n;
 
 	srand(12345);
-	spdif_bmc_init(&e);
-	memset(&ref, 0, sizeof(ref));
 	for (n = 0; n < 200000; n++) {
-		s32 l, r;
+		uint32_t a = (uint32_t)rand() << 16 ^ (uint32_t)rand() << 1 ^ (uint32_t)rand() >> 7;
+		uint32_t b = (uint32_t)rand() << 16 ^ (uint32_t)rand() << 2 ^ (uint32_t)rand() >> 9;
 
-		if (n % 977 == 0) {	/* new status at an arbitrary point in the block */
-			for (int i = 0; i < 24; i++)
-				cs[i] = rand() & 0xff;
-			spdif_bmc_set_status(&e, cs);
-			ref_status(&ref, cs);
-		}
-		switch (rand() % 4) {
-		case 0:
-			l = 0;		/* silence table */
-			r = 0;
-			break;
-		case 1:
-			l = rand() & 0xff;	/* only below the top 24 bits */
-			r = -(rand() & 0xff) & 0xff;
-			break;
-		default:
-			l = (s32)((u32)rand() << 8);
-			r = (s32)((u32)rand() << 8 ^ (u32)rand() << 20);
-		}
-		spdif_bmc_encode(&e, w, l, r);
-		ref_encode(&ref, rw, l, r);
+		a = (a & ~(uint32_t)0xf) | (rand() % 3 ? SPDIF_BMC_MARK_M : SPDIF_BMC_MARK_B);
+		spdif_bmc_encode_subframes(w, a, b);
+		ref_encode(rw, a, b);
 		if (memcmp(w, rw, sizeof(w)))
 			bad++;
 	}

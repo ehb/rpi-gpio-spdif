@@ -6,15 +6,16 @@
 # build_addon.py with the aarch64 build. Needs Linux, alsa-utils (aplay), libasound with the
 # system alsa.conf, python3, unzip. Prints "ALL OK" only if every check passes.
 #
-#   TS_SO=<native plugin .so> TS_SO_A64=<aarch64 plugin .so> sh test/test_addon.sh
+#   TS_SO=<native plugin .so> TS_SO_A64=<aarch64 plugin .so> TS_DTBO=<spdif-gpio21.dtbo> \
+#       sh test/test_addon.sh
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(dirname "$HERE")
 LE=$ROOT/libreelec
 SCRIPT=$LE/addon/bin/rpi-gpio-spdif
-: "${TS_SO:?set TS_SO}" "${TS_SO_A64:?set TS_SO_A64}"
-TS_SO=$(readlink -f "$TS_SO"); TS_SO_A64=$(readlink -f "$TS_SO_A64")
+: "${TS_SO:?set TS_SO}" "${TS_SO_A64:?set TS_SO_A64}" "${TS_DTBO:?set TS_DTBO}"
+TS_SO=$(readlink -f "$TS_SO"); TS_SO_A64=$(readlink -f "$TS_SO_A64"); TS_DTBO=$(readlink -f "$TS_DTBO")
 
 T=$(mktemp -d /tmp/spdif-addon.XXXXXX) || exit 1
 cleanup() { rm -rf "$T"; }
@@ -39,16 +40,21 @@ cp "$SCRIPT" "$A/bin/rpi-gpio-spdif"
 cp "$TS_SO" "$A/lib/libasound_module_pcm_spdifbmc.so"
 : > "$PROC/modules"; : > "$PROC/asound/cards"
 
-# dtoverlay: NAME applies, -r NAME removes, -l lists; applying hifiberry-dac makes the card
-# appear unless the file $T/nocard exists. Every call is logged in $T/dt.log.
+# dtoverlay: NAME applies, -d DIR NAME applies DIR/NAME.dtbo (fails when the file is missing
+# or $T/ownfail exists), -r NAME removes, -l lists. hifiberry-dac makes the card
+# sndrpihifiberry appear unless $T/nocard exists; spdif-gpio21 the card spdifgpio21 unless
+# $T/nocard_own exists. Every call is logged in $T/dt.log.
 printf '%s\n' \
   '#!/bin/sh' \
   'echo "$*" >> "$FAKE_DIR/dt.log"' \
   'OV=$FAKE_DIR/overlays; touch "$OV"' \
   'case "$1" in' \
   '  -l) if [ -s "$OV" ]; then echo "Overlays (in load order):"; n=0; while read -r o; do echo "$n:  $o"; n=$((n + 1)); done < "$OV"; else echo "No overlays loaded"; fi ;;' \
-  '  -r) grep -vx "$2" "$OV" > "$OV.new"; mv "$OV.new" "$OV"; [ "$2" = hifiberry-dac ] && : > "$FAKE_PROC/asound/cards" ;;' \
-  '  *) echo "$1" >> "$OV"; [ "$1" = hifiberry-dac ] && [ ! -e "$FAKE_DIR/nocard" ] && echo " 0 [sndrpihifiberry ]: RPi-simple - snd_rpi_hifiberry_dac" > "$FAKE_PROC/asound/cards" ;;' \
+  '  -r) grep -vx "$2" "$OV" > "$OV.new"; mv "$OV.new" "$OV"; case "$2" in hifiberry-dac|spdif-gpio21) : > "$FAKE_PROC/asound/cards" ;; esac ;;' \
+  '  -d) [ -f "$2/$3.dtbo" ] && [ ! -e "$FAKE_DIR/ownfail" ] || exit 1' \
+  '      echo "$3" >> "$OV"' \
+  '      [ "$3" = spdif-gpio21 ] && [ ! -e "$FAKE_DIR/nocard_own" ] && echo " 0 [spdifgpio21    ]: simple-card - spdif-gpio21" > "$FAKE_PROC/asound/cards" ;;' \
+  '  *) echo "$1" >> "$OV"; [ "$1" = hifiberry-dac ] && [ ! -e "$FAKE_DIR/nocard" ] && echo " 0 [sndrpihifiberry]: RPi-simple - snd_rpi_hifiberry_dac" > "$FAKE_PROC/asound/cards" ;;' \
   'esac' \
   'exit 0' > "$T/dtoverlay"
 printf '%s\n' '#!/bin/sh' '[ -e "$FAKE_DIR/raspdif-running" ]' > "$T/pidof"
@@ -73,7 +79,8 @@ settings() { # settings 'xml lines'
 }
 dtcount() { grep -c -x -- "$1" "$T/dt.log" 2> /dev/null || true; }
 reset_world() { # nothing applied, nothing loaded, no files
-  rm -f "$CONF" "$CONF.tmp" "$STATUS" "$APPLIED" "$T/dt.log" "$T/overlays" "$T/nocard" "$T/raspdif-running"
+  rm -f "$CONF" "$CONF.tmp" "$STATUS" "$APPLIED" "$T/dt.log" "$T/overlays" "$T/nocard" "$T/raspdif-running" \
+        "$T/ownfail" "$T/nocard_own"
   : > "$PROC/modules"; : > "$PROC/asound/cards"
 }
 
@@ -107,6 +114,8 @@ for d, _, fs in os.walk(sys.argv[1]):
         open(os.path.join(d, f), encoding='ascii').read()" "$LE/addon"
 
 # ---- defaults (no settings file) --------------------------------------------------------
+# Up to the section "own overlay" the fake add-on has no overlays/spdif-gpio21.dtbo, so start
+# takes the fallback hifiberry-dac: these checks are about everything except the overlay choice.
 reset_world
 $S start > "$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && ok "start with no settings file" || { bad "start with no settings file (rc $rc)"; cat "$T/out"; }
@@ -116,8 +125,10 @@ check "no tmp file left" test ! -e "$CONF.tmp"
 check "plugin path points into the add-on" has "lib \"$A/lib/libasound_module_pcm_spdifbmc.so\"" "$CONF"
 check "slave is the card" has 'slave.pcm "hw:CARD=sndrpihifiberry"' "$CONF"
 check "default extra_ms 80" has '^  extra_ms 80$' "$CONF"
-check "AES arguments with default -1" sh -c "[ \$(grep -c '^  @args.AES[0-3] { type integer default -1 }\$' '$CONF') = 4 ]"
-check "aes0..3 passed on" sh -c "grep -qx '  aes0 \$AES0' '$CONF' && grep -qx '  aes3 \$AES3' '$CONF'"
+check "AES arguments default to consumer PCM, rate not indicated" sh -c "grep -qx '  @args.AES0 { type integer default 4 }' '$CONF' && grep -qx '  @args.AES1 { type integer default 130 }' '$CONF' && grep -qx '  @args.AES2 { type integer default 0 }' '$CONF' && grep -qx '  @args.AES3 { type integer default 1 }' '$CONF'"
+check "hdmi_bmc is iec958 in front of the coder" sh -c "grep -qx '  type iec958' '$CONF' && grep -qx '    pcm \"hdmi_bmc_coder\"' '$CONF' && grep -qx '    format IEC958_SUBFRAME_LE' '$CONF'"
+check "AES bytes become iec958's status" grep -qx '  status \[ \$AES0 \$AES1 \$AES2 \$AES3 \]' "$CONF"
+check "the coder is hidden from device lists" grep -qx '  hint.show off' "$CONF"
 check "hint description" has 'description "S/PDIF on GPIO21"' "$CONF"
 check "name begins with hdmi" has '^pcm.hdmi_bmc {' "$CONF"
 check "overlay hifiberry-dac applied once" sh -c "[ \"\$(grep -cx hifiberry-dac '$T/dt.log')\" = 1 ]"
@@ -151,13 +162,14 @@ import sys
 n = len(open(sys.argv[1], 'rb').read())
 sys.exit(0 if n >= (48000 + 3840) * 16 and n % 16 == 0 else 1)" "$PLAY/out.raw"
 play hdmi_bmc:6,130,0,2
-check "AES0 from the player ends up in the channel status" python3 -c "
+check "AES0 from the player ends up in the channel status (after the 80 ms lead)" python3 -c "
 import sys
 sys.path.insert(0, sys.argv[1])
 import bmc_decode as bmc
 got, csa, csb, errors = bmc.decode(open(sys.argv[2], 'rb').read())
-b0 = sum(csa[j] << j for j in range(8))
+b0 = sum(csa[3840 + j] << j for j in range(8))
 sys.exit(0 if not errors and b0 == 6 else 1)" "$HERE" "$PLAY/out.raw"
+nocheck "hdmi_bmc_coder is not listed" sh -c "ALSA_CONFIG_PATH=$PLAY/asound.conf aplay -L 2>&1 | grep -qx hdmi_bmc_coder"
 
 # ---- settings ---------------------------------------------------------------------------
 settings '    <setting id="extra_ms" default="false">200</setting>'
@@ -299,13 +311,76 @@ nocheck "clean stop removes the status file" test -e "$STATUS"
 check "stop exits 0 even without a dtoverlay" env SPDIF_DTOVERLAY=/nonexistent $S stop
 check "unknown command is a usage error" sh -c "! $S bogus"
 
+# ---- own overlay spdif-gpio21 and the fallback to hifiberry-dac -------------------------
+mkdir -p "$A/overlays"
+cp "$TS_DTBO" "$A/overlays/spdif-gpio21.dtbo"
+reset_world
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && ok "own overlay: start" || { bad "own overlay: start (rc $rc)"; cat "$T/out"; }
+check "own overlay applied from the add-on directory" grep -qx -- "-d $A/overlays spdif-gpio21" "$T/dt.log"
+check "own overlay: slave is the card spdifgpio21" has 'slave.pcm "hw:CARD=spdifgpio21"' "$CONF"
+nocheck "own overlay: hifiberry-dac not applied" grep -qx hifiberry-dac "$T/dt.log"
+check "own overlay: the log names it" has 'overlay spdif-gpio21, device hdmi_bmc -> hw:CARD=spdifgpio21' "$T/out"
+check "own overlay: aplay -L lists hdmi_bmc" sh -c "aplay -L 2>&1 | grep -qx hdmi_bmc"
+$S start > "$T/out" 2>&1
+check "own overlay: second start applies it only once" sh -c "[ \"\$(grep -c -- '-d .* spdif-gpio21' '$T/dt.log')\" = 1 ]"
+$S stop
+nocheck "own overlay: stop removes it" grep -qx spdif-gpio21 "$T/overlays"
+nocheck "own overlay: stop removes the conf.d file" test -e "$CONF"
+
+reset_world
+touch "$T/ownfail"
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && ok "own overlay does not apply (e.g. Pi 5): start succeeds" || { bad "own overlay does not apply: start succeeds (rc $rc)"; cat "$T/out"; }
+check "  ... falls back to hifiberry-dac" has 'slave.pcm "hw:CARD=sndrpihifiberry"' "$CONF"
+check "  ... says why and that it falls back" sh -c "grep -q 'applying the overlay spdif-gpio21 failed' '$T/out' && grep -q 'falling back to the stock overlay hifiberry-dac' '$T/out'"
+nocheck "  ... no status (it is not an error)" test -e "$STATUS"
+
+reset_world
+touch "$T/nocard_own"
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && ok "own card does not appear: start succeeds" || { bad "own card does not appear: start succeeds (rc $rc)"; cat "$T/out"; }
+check "  ... the own overlay is removed again" sh -c "grep -qx -- '-r spdif-gpio21' '$T/dt.log' && ! grep -qx spdif-gpio21 '$T/overlays'"
+check "  ... falls back to hifiberry-dac" has 'slave.pcm "hw:CARD=sndrpihifiberry"' "$CONF"
+check "  ... says the card did not appear" has 'spdifgpio21 did not appear' "$T/out"
+
+reset_world
+touch "$T/ownfail" "$T/nocard"
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc != 0 ] && ok "neither overlay works: start fails" || bad "neither overlay works: start fails"
+check "  ... the reason names the fallback card" grep -q 'sndrpihifiberry did not appear' "$STATUS"
+nocheck "  ... no configuration" test -e "$CONF"
+SERVICE_RESULT=exit-code $S stop
+rm -f "$STATUS"
+
+reset_world
+echo hifiberry-dac > "$T/overlays"
+echo " 0 [sndrpihifiberry]: RPi-simple - snd_rpi_hifiberry_dac" > "$PROC/asound/cards"
+$S start > "$T/out" 2>&1
+check "hifiberry-dac already applied: it stays in use" has 'slave.pcm "hw:CARD=sndrpihifiberry"' "$CONF"
+nocheck "  ... the own overlay is not applied next to it" grep -q spdif-gpio21 "$T/dt.log"
+$S stop
+nocheck "  ... stop removes hifiberry-dac" grep -qx hifiberry-dac "$T/overlays"
+
+reset_world
+printf 'rpi_gpio_spdif 20480 0 - Live 0x0\n' > "$PROC/modules"
+$S start > "$T/out" 2>&1
+nocheck "kernel driver loaded: the own overlay is not applied either" grep -q spdif-gpio21 "$T/dt.log"
+rm -f "$STATUS"
+rm -rf "$A/overlays"
+reset_world
+
 # ---- build_addon.py ---------------------------------------------------------------------
-B="python3 $LE/build_addon.py --out $T/out-zip"
+B="python3 $LE/build_addon.py --out $T/out-zip --dtbo $TS_DTBO"
 $B --so "$TS_SO" > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && grep -q AArch64 "$T/b.out" && ok "wrong architecture refused" || bad "wrong architecture refused"
 printf 'not an elf' > "$T/junk.bin"
 $B --so "$T/junk.bin" > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && grep -q 'not an ELF' "$T/b.out" && ok "non-ELF refused" || bad "non-ELF refused"
+python3 "$LE/build_addon.py" --out "$T/out-zip" --so "$TS_SO_A64" --dtbo "$T/junk.bin" > "$T/b.out" 2>&1; rc=$?
+[ $rc != 0 ] && grep -q 'not a device tree blob' "$T/b.out" && ok "non-dtbo overlay refused" || bad "non-dtbo overlay refused"
+python3 "$LE/build_addon.py" --out "$T/out-zip" --so "$TS_SO_A64" > "$T/b.out" 2>&1; rc=$?
+[ $rc != 0 ] && ok "--dtbo is required" || bad "--dtbo is required"
 nocheck "no zip after refusals" test -e "$T/out-zip"
 $B --so "$TS_SO_A64" --version 1.x > "$T/b.out" 2>&1; rc=$?
 [ $rc != 0 ] && ok "bad version refused" || bad "bad version refused"
@@ -316,7 +391,7 @@ check "zip named after id and version" test -f "$Z"
 mkdir -p "$T/unz"; unzip -q -o "$Z" -d "$T/unz" 2> /dev/null
 P=$T/unz/service.rpi-gpio-spdif
 for f in addon.xml default.py LICENSE.txt bin/rpi-gpio-spdif lib/libasound_module_pcm_spdifbmc.so \
-         system.d/service.rpi-gpio-spdif.service resources/settings.xml \
+         overlays/spdif-gpio21.dtbo system.d/service.rpi-gpio-spdif.service resources/settings.xml \
          resources/language/resource.language.en_gb/strings.po; do
   check "zip has $f" test -f "$P/$f"
 done
@@ -328,6 +403,7 @@ z = zipfile.ZipFile(sys.argv[1])
 m = {i.filename.split('/', 1)[1]: (i.external_attr >> 16) & 0o111 for i in z.infolist()}
 sys.exit(0 if m['bin/rpi-gpio-spdif'] and not m['default.py'] and not m['lib/libasound_module_pcm_spdifbmc.so'] else 1)" "$Z"
 check "zip: plugin is the aarch64 one" cmp "$P/lib/libasound_module_pcm_spdifbmc.so" "$TS_SO_A64"
+check "zip: overlay is the one built" cmp "$P/overlays/spdif-gpio21.dtbo" "$TS_DTBO"
 check "zip: script is the one under test" cmp "$P/bin/rpi-gpio-spdif" "$SCRIPT"
 $B --so "$TS_SO_A64" > "$T/b.out" 2>&1
 CLV=$(sed -n 's/^## \([0-9][0-9.]*\)$/\1/p' "$ROOT/CHANGELOG.md" | head -n 1)

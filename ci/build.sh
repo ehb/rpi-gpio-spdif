@@ -2,16 +2,26 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Build the plugin with warnings as errors, from the repository root:
 #   ci/build.sh native|aarch64|armhf  -> build/<arch>/libasound_module_pcm_spdifbmc.so
+#   ci/build.sh overlay               -> build/overlay/spdif-gpio21.dtbo
 # The cross builds compile against a copy of the host ALSA headers; the plugin links no
 # libasound, its symbols resolve at load time inside the host application.
 set -e
 ARCH=$1
 CFLAGS="-O2 -g -Wall -Wextra -Werror"
+if [ "$ARCH" = overlay ]; then
+    make overlay BUILD=build/overlay
+    # the symbols the overlay resolves against the Pi's base device tree
+    for sym in i2s_pins i2s_clk_producer sound; do
+        fdtget build/overlay/spdif-gpio21.dtbo /__fixups__ "$sym" > /dev/null
+    done
+    echo "built build/overlay/spdif-gpio21.dtbo"
+    exit 0
+fi
 case "$ARCH" in
     native)  CC=gcc;                     READELF=readelf;                     MACHINE="X86-64|AArch64" ;;
     aarch64) CC=aarch64-linux-gnu-gcc;   READELF=aarch64-linux-gnu-readelf;   MACHINE=AArch64 ;;
     armhf)   CC=arm-linux-gnueabihf-gcc; READELF=arm-linux-gnueabihf-readelf; MACHINE=ARM ;;
-    *) echo "usage: ci/build.sh native|aarch64|armhf" >&2; exit 2 ;;
+    *) echo "usage: ci/build.sh native|aarch64|armhf|overlay" >&2; exit 2 ;;
 esac
 
 INC=build/alsainc-$ARCH

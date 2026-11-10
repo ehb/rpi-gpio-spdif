@@ -1,10 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 # Start/stop helper of the LibreELEC add-on service.rpi-gpio-spdif.
-#   start: apply the stock overlay hifiberry-dac, wait for the card sndrpihifiberry and write
-#          the ALSA configuration (device hdmi_bmc, the spdifbmc plugin of this add-on)
-#   stop:  remove what start wrote and the overlay (the status file only after a clean
-#          stop: a failed start leaves its reason for Kodi, see default.py)
+#   start: apply the add-on's own overlay spdif-gpio21 (only GPIO21, card spdifgpio21); if it
+#          does not apply or its card does not appear, remove it again and fall back to the
+#          stock overlay hifiberry-dac (card sndrpihifiberry). Then write the ALSA
+#          configuration (device hdmi_bmc, the spdifbmc plugin of this add-on)
+#   stop:  remove what start wrote and whichever overlay is applied (the status file only
+#          after a clean stop: a failed start leaves its reason for Kodi, see default.py)
 #   current: print the effective settings (the line start stores as 'applied'); default.py
 #          compares the two to see whether a settings change needs a restart
 # Paths and commands can be overridden for tests (see test/test_addon.sh).
@@ -24,8 +26,11 @@ APPLIED=$RUN/$ID.applied
 # the kernel driver add-on writes the same file name with the mark "# written by driver.audio..."
 MARK="# written by $ID"
 PLUGIN=$A/lib/libasound_module_pcm_spdifbmc.so
-OVERLAY=hifiberry-dac
-CARD=sndrpihifiberry
+OVLDIR=$A/overlays
+OWN=spdif-gpio21
+OWN_CARD=spdifgpio21
+STOCK=hifiberry-dac
+STOCK_CARD=sndrpihifiberry
 
 DEF_EXTRA=80
 
@@ -60,7 +65,33 @@ effective() { echo "extra_ms=$S_EXTRA"; }
 
 driver_loaded() { grep -q '^rpi_gpio_spdif ' "$PROC/modules" 2> /dev/null; }
 overlay_applied() { "$DTOVERLAY" -l 2> /dev/null | grep -q " $1\$"; }
-card_there() { grep -q "$CARD" "$PROC/asound/cards" 2> /dev/null; }
+card_there() { grep -q "\[$1 *\]" "$PROC/asound/cards" 2> /dev/null; }
+# wait_card CARD: up to CARD_WAIT seconds
+wait_card() {
+  i=0
+  while ! card_there "$1" && [ "$i" -lt "$CARD_WAIT" ]; do sleep 1; i=$((i + 1)); done
+  card_there "$1"
+}
+
+# use_own: the own overlay applied (or already there) and its card up -> CARD set
+use_own() {
+  [ -f "$OVLDIR/$OWN.dtbo" ] || { log "no $OVLDIR/$OWN.dtbo"; return 1; }
+  if ! overlay_applied $OWN; then
+    "$DTOVERLAY" -d "$OVLDIR" $OWN || { log "applying the overlay $OWN failed"; return 1; }
+  fi
+  if ! wait_card $OWN_CARD; then
+    log "the sound card $OWN_CARD did not appear after the overlay $OWN"
+    "$DTOVERLAY" -r $OWN
+    return 1
+  fi
+  OVERLAY=$OWN; CARD=$OWN_CARD
+}
+
+use_stock() {
+  overlay_applied $STOCK || "$DTOVERLAY" $STOCK || fail "applying the overlay $STOCK failed"
+  wait_card $STOCK_CARD || fail "the sound card $STOCK_CARD did not appear after the overlay $STOCK"
+  OVERLAY=$STOCK; CARD=$STOCK_CARD
+}
 
 start() {
   rm -f "$STATUS"
@@ -77,10 +108,14 @@ start() {
   fi
   load_settings
 
-  overlay_applied $OVERLAY || "$DTOVERLAY" $OVERLAY || fail "applying the overlay $OVERLAY failed"
-  i=0
-  while ! card_there && [ "$i" -lt "$CARD_WAIT" ]; do sleep 1; i=$((i + 1)); done
-  card_there || fail "the sound card $CARD did not appear after the overlay $OVERLAY"
+  # the stock overlay from an earlier start stays in use (switching under a running card is
+  # not worth it); otherwise the own overlay first, the stock one as the fallback
+  if overlay_applied $STOCK; then
+    use_stock
+  elif ! use_own; then
+    log "falling back to the stock overlay $STOCK"
+    use_stock
+  fi
 
   # /var is a tmpfs on LibreELEC, the directory does not exist before someone makes it
   mkdir -p "$CONFD" || fail "cannot create $CONFD"
@@ -91,21 +126,29 @@ start() {
     echo "  lib \"$PLUGIN\""
     echo "}"
     echo
-    echo "# The name has to begin with hdmi: Kodi offers passthrough only on iec958/spdif/hdmi"
-    echo "# names, and appends the channel status bytes as arguments."
-    echo "pcm.hdmi_bmc {"
-    echo "  @args [ AES0 AES1 AES2 AES3 ]"
-    echo "  @args.AES0 { type integer default -1 }"
-    echo "  @args.AES1 { type integer default -1 }"
-    echo "  @args.AES2 { type integer default -1 }"
-    echo "  @args.AES3 { type integer default -1 }"
+    echo "# biphase-mark coding of the sub-frames that iec958 below builds"
+    echo "pcm.hdmi_bmc_coder {"
     echo "  type spdifbmc"
     echo "  slave.pcm \"hw:CARD=$CARD\""
     echo "  extra_ms $S_EXTRA"
-    echo "  aes0 \$AES0"
-    echo "  aes1 \$AES1"
-    echo "  aes2 \$AES2"
-    echo "  aes3 \$AES3"
+    echo "  hint.show off"
+    echo "}"
+    echo
+    echo "# The name has to begin with hdmi: Kodi offers passthrough only on iec958/spdif/hdmi"
+    echo "# names, and appends the channel status bytes as arguments. Without them: consumer"
+    echo "# PCM, rate filled in by iec958 from the stream."
+    echo "pcm.hdmi_bmc {"
+    echo "  @args [ AES0 AES1 AES2 AES3 ]"
+    echo "  @args.AES0 { type integer default 4 }"
+    echo "  @args.AES1 { type integer default 130 }"
+    echo "  @args.AES2 { type integer default 0 }"
+    echo "  @args.AES3 { type integer default 1 }"
+    echo "  type iec958"
+    echo "  slave {"
+    echo "    pcm \"hdmi_bmc_coder\""
+    echo "    format IEC958_SUBFRAME_LE"
+    echo "  }"
+    echo "  status [ \$AES0 \$AES1 \$AES2 \$AES3 ]"
     echo "  hint {"
     echo "    show on"
     echo "    description \"S/PDIF on GPIO21\""
@@ -114,7 +157,7 @@ start() {
   } > "$CONF.tmp" && mv "$CONF.tmp" "$CONF" || fail "cannot write $CONF"
 
   effective > "$APPLIED" || fail "cannot write $APPLIED"
-  log "device hdmi_bmc -> hw:CARD=$CARD, extra_ms $S_EXTRA"
+  log "overlay $OVERLAY, device hdmi_bmc -> hw:CARD=$CARD, extra_ms $S_EXTRA"
 }
 
 stop() {
@@ -125,7 +168,8 @@ stop() {
   rm -f "$APPLIED" "$CONF.tmp"
   grep -q "^$MARK" "$CONF" 2> /dev/null && rm -f "$CONF"
   rmdir "$CONFD" 2> /dev/null
-  overlay_applied $OVERLAY && "$DTOVERLAY" -r $OVERLAY
+  overlay_applied $OWN && "$DTOVERLAY" -r $OWN
+  overlay_applied $STOCK && "$DTOVERLAY" -r $STOCK
   return 0
 }
 

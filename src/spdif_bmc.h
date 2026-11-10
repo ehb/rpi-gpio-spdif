@@ -2,10 +2,12 @@
 /*
  * S/PDIF (IEC 60958) biphase-mark encoder for a plain serial output.
  *
- * Every sub-frame becomes one 64-bit code, sent MSB first: the preamble in the top
- * byte, then 28 biphase-mark coded bits (aux, 20-bit sample, V, U, C, P). On the
- * BCM2835 PCM/I2S block clocked at fs x 128 with 32-bit frames, one stereo sample
- * frame is four 32-bit FIFO words: A.hi, A.lo, B.hi, B.lo.
+ * Input are sub-frames already formatted in the 32-bit layout of ALSA's
+ * IEC958_SUBFRAME_LE, as alsa-lib's iec958 plugin writes them: bits 0..3 preamble mark,
+ * 4..27 audio, 28 V, 29 U, 30 C, 31 P. Every sub-frame becomes one 64-bit code, sent MSB
+ * first: the preamble in the top byte, then 28 biphase-mark coded bits. On the BCM2835
+ * PCM/I2S block clocked at fs x 128 with 32-bit slots, one stereo frame is four 32-bit
+ * FIFO words: A.hi, A.lo, B.hi, B.lo.
  *
  * The coding scheme (nibble look-up table, branch-free polarity follow-up, preamble
  * bytes) follows raspdif by mill1000 (MIT); the same idea is in kiffie's
@@ -15,44 +17,22 @@
 #ifndef SPDIF_BMC_H
 #define SPDIF_BMC_H
 
-#include <stdbool.h>
 #include <stdint.h>
-typedef uint8_t u8;
-typedef uint32_t u32;
-typedef int32_t s32;
-typedef uint64_t u64;
 
 #define SPDIF_BMC_BLOCK		192	/* frames per channel status block */
-#define SPDIF_BMC_STATUS_BYTES	(SPDIF_BMC_BLOCK / 8)
 #define SPDIF_BMC_WORDS		4	/* 32-bit output words per stereo frame */
 
-struct spdif_bmc {
-	u8 status_a[SPDIF_BMC_STATUS_BYTES];	/* channel status being sent */
-	u8 status_b[SPDIF_BMC_STATUS_BYTES];
-	u8 next_a[SPDIF_BMC_STATUS_BYTES];	/* taken over at the next block start */
-	u8 next_b[SPDIF_BMC_STATUS_BYTES];
-	bool next_pending;
-	unsigned int frame;			/* position in the 192-frame block */
-	u64 silence[3][2];			/* codes of a zero sample: [B, M, W][C bit] */
-};
-
-/* Set up the silence table; status all zero until spdif_bmc_set_status(). */
-void spdif_bmc_init(struct spdif_bmc *e);
+/* alsa-lib's default preamble marks in bits 0..3 (iec958 plugin: Z, X, Y) */
+#define SPDIF_BMC_MARK_B	0x08	/* block start, first sub-frame */
+#define SPDIF_BMC_MARK_M	0x02	/* first sub-frame */
+#define SPDIF_BMC_MARK_W	0x04	/* second sub-frame */
 
 /*
- * Channel status (IEC 60958-3 consumer bytes 0..23) for both sub-frames, taken over
- * at the next block start so that no block carries two different states. If it names
- * channel 1 for A (byte 2, bits 4..7), B gets channel 2.
+ * Encode one stereo frame given as two sub-frames. The first sub-frame gets preamble B
+ * if its mark is SPDIF_BMC_MARK_B, else M; the second always W. The parity bit of the
+ * input is ignored: the coding always produces even parity. Writes SPDIF_BMC_WORDS words
+ * in transmit order.
  */
-void spdif_bmc_set_status(struct spdif_bmc *e, const u8 *status);
-
-/* Restart at a block start, taking over a pending status at once. */
-void spdif_bmc_reset(struct spdif_bmc *e);
-
-/*
- * Encode one stereo frame; samples are left-justified 32-bit, the top 24 bits are
- * sent. Writes SPDIF_BMC_WORDS words in transmit order.
- */
-void spdif_bmc_encode(struct spdif_bmc *e, u32 *out, s32 left, s32 right);
+void spdif_bmc_encode_subframes(uint32_t *out, uint32_t a, uint32_t b);
 
 #endif

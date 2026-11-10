@@ -8,7 +8,7 @@ permissions: {}
 
 jobs:
   build:
-    name: build (native, aarch64, armhf)
+    name: build (native, aarch64, armhf, overlay)
     runs-on: ubuntu-24.04
     container: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
     permissions:
@@ -19,6 +19,7 @@ jobs:
       - run: sh ci/build.sh native
       - run: sh ci/build.sh aarch64
       - run: sh ci/build.sh armhf
+      - run: sh ci/build.sh overlay
 
   test:
     name: encoder, plugin and add-on tests
@@ -31,4 +32,5 @@ jobs:
       - run: sh ci/install_deps.sh
       - run: sh ci/build.sh native
       - run: sh ci/build.sh aarch64
+      - run: sh ci/build.sh overlay
       - run: sh ci/test.sh
