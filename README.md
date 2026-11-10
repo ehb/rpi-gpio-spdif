@@ -52,7 +52,7 @@ Other ways to get the signal out (not built or tested here):
 Rates stop at 96 kHz on purpose: 176.4/192 kHz would need a 24.6 MHz PCM clock (not tried),
 many TOSLINK parts are specified to 96 kHz, and the main use of 192 kHz on S/PDIF -- E-AC3
 (Dolby Digital Plus) passthrough -- is accepted on optical inputs by hardly any receiver.
-Kodi transcodes E-AC3 to AC3 instead. Dolby TrueHD and DTS-HD Master Audio need HDMI in any
+With its passthrough switched off, Kodi decodes E-AC3 instead. Dolby TrueHD and DTS-HD Master Audio need HDMI in any
 case.
 
 ## Install
@@ -79,6 +79,9 @@ output device **and** as passthrough device, and enable AC3/DTS. Kodi offers pas
 on devices named `iec958`, `spdif` or `hdmi`, which is why the device name begins with
 `hdmi_`. With speakers set to 2.0, Kodi can also re-encode multichannel sources it cannot
 pass through (AAC/Opus 5.1 and similar) to AC3 ("Dolby Digital (AC3) transcoding").
+
+**Keep E-AC3, TrueHD and DTS-HD passthrough switched off in Kodi.** Because of its name Kodi takes
+the device for HDMI and offers them, but they do not fit through S/PDIF.
 
 **Other systems (Raspberry Pi OS, ...).** Take `rpi-gpio-spdif-<version>-aarch64.tar.gz` (or
 `-armhf`) from the Releases page, put the library somewhere persistent, add
