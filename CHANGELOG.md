@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.4
+
+- Documentation only, no change to the plugin, the overlay or the add-on's behaviour.
+- The overlay `spdif-gpio21` has been merged into the Raspberry Pi kernel (`rpi-6.18.y`,
+  raspberrypi/linux#7748); not yet in a released kernel, so the add-on keeps bringing its
+  own copy.
+- The overlay alone was run on a Pi 2 and a Pi 5 by a Raspberry Pi engineer (I2S clock and
+  data as expected). The whole chain with a receiver is still tested only on a Pi 4B.
+
 ## 0.3.3
 
 - Fixed: an add-on update (or a settings change) while Kodi played removed the overlay under

@@ -17,13 +17,18 @@ only the biphase-mark coding.
 - **Keep-alive in Kodi**: between tracks the card keeps playing silence (see Limits), so
   the receiver stays locked and the start of the next track is not cut off.
 
-Hardware scope: Raspberry Pi 0-4 (BCM2835 to BCM2711), tested only on one Pi 4B. The
-Pi 5 is untested: the plugin does not touch the hardware, and according to Raspberry Pi
-engineers the RP1's I2S block should do the job and the same overlay should apply there (the
-RP1 pin driver maps the legacy pin settings, GPIO21 ALT0 becomes I2S0); it has only been
-checked by applying it to the Pi 5 base device tree. Reports are welcome. The ready-made
-add-on is for 64-bit systems (aarch64); the plugin tarball is also built for armhf
-(untested).
+Hardware scope: Raspberry Pi 0-5. The whole chain (plugin, overlay, Kodi, a receiver) has
+been tested only on one Pi 4B. The overlay on its own was run by a Raspberry Pi engineer on
+a Pi 2 and a Pi 5: the I2S clock runs at the expected rate and the data comes out (on the
+Pi 5 the RP1 pin driver maps the legacy pin settings, GPIO21 ALT0 becomes I2S0). Nobody
+has yet listened to the plugin's output through a receiver on those models; reports are
+welcome. The ready-made add-on is for 64-bit systems (aarch64); the plugin tarball is also
+built for armhf (untested).
+
+The overlay `spdif-gpio21` has been merged into the Raspberry Pi kernel (branch
+`rpi-6.18.y`, raspberrypi/linux#7748). Once your kernel ships it, `dtoverlay=spdif-gpio21`
+works without building the overlay from this repository; at the time of writing no
+released kernel or LibreELEC version contains it yet, so the add-on brings its own copy.
 
 ## Hardware
 
@@ -158,7 +163,8 @@ sound card from parts that ship with the Pi kernel: `simple-audio-card` with the
 S/PDIF transmitter codec `linux,spdif-dit` (accepts S32_LE up to 768 kHz), the Pi as clock
 producer with two 32-bit slots per frame, and only GPIO21 switched to PCM_DOUT; GPIO18-20
 stay free (the overlay adds its own pin group for GPIO21 and points the I2S block at it; on
-a Pi 5 the RP1 pin driver maps it to I2S0, untested). The stock overlay `hifiberry-dac` (a
+a Pi 5 the RP1 pin driver maps it to I2S0; the overlay was run on a Pi 2 and a Pi 5, see
+the hardware scope above). The stock overlay `hifiberry-dac` (a
 DAC chip's configuration, all four pins) works as well and is the fallback.
 
 In front of the card, alsa-lib's `iec958` plugin turns the application's PCM into IEC 60958
@@ -198,7 +204,8 @@ optical input:
   (samples, block starts, channel status, lead silence), the add-on helper with overlay
   fallback, and the zip.
 
-Not tested: other Pi models, Raspberry Pi OS, armhf, other receivers, hours-long runs.
+Not tested: the whole chain on other Pi models (the overlay alone ran on a Pi 2 and a Pi 5),
+Raspberry Pi OS, armhf, other receivers, hours-long runs.
 
 ## Limits
 
@@ -212,8 +219,9 @@ Not tested: other Pi models, Raspberry Pi OS, armhf, other receivers, hours-long
   names starting with `iec958`, `spdif` or `hdmi`.
 - **96 kHz with aplay's default large buffer fails** (hw_params refuse the period); Kodi
   does not hit this.
-- Tested only on one Pi 4B. Other models are checked only by applying the overlay to their
-  base device trees (Pi 1 B+, Zero W, Zero 2 W, 3 B, 5 B); the Pi 5 has never run it.
+- The whole chain is tested only on one Pi 4B. The overlay alone ran on a Pi 2 and a Pi 5
+  (I2S clock and data checked, no receiver); for Pi 1 B+, Zero W, Zero 2 W and 3 B it was
+  only applied to their base device trees.
 - The 3.3 V GPIO level and the TOSLINK module are your responsibility; see Hardware.
 - Receivers can take a second or two to lock after a sample-rate change and may swallow
   the start of a stream then. Fixing the player's output rate (Kodi: output configuration
