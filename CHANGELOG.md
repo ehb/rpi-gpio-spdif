@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3
+
+- Fixed: an add-on update (or a settings change) while Kodi played removed the overlay under
+  the open sound card; Kodi lost the device and switched to HDMI. The add-on now keeps the
+  overlay applied while the card is in use and only rewrites the ALSA configuration.
+- The add-on also recognises an applied overlay from the kernel's configfs; after a boot,
+  `dtoverlay -l` could list nothing although the overlay was applied.
+
 ## 0.3.2
 
 - One overlay for all models: `spdif-gpio21` now adds its own pin group for GPIO21 (the

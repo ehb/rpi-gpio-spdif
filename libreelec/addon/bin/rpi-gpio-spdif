@@ -5,8 +5,10 @@
 #          does not apply or its card does not appear, remove it again and fall back to the
 #          stock overlay hifiberry-dac (card sndrpihifiberry). Then write the ALSA
 #          configuration (device hdmi_bmc, the spdifbmc plugin of this add-on)
-#   stop:  remove what start wrote and whichever overlay is applied (the status file only
-#          after a clean stop: a failed start leaves its reason for Kodi, see default.py)
+#   stop:  remove what start wrote; remove the overlay only while its sound card is closed
+#          (an add-on update or a settings change restarts the unit while Kodi plays: taking
+#          the card away then made Kodi drop the device and switch to HDMI). The status file
+#          only after a clean stop: a failed start leaves its reason for Kodi, see default.py
 #   current: print the effective settings (the line start stores as 'applied'); default.py
 #          compares the two to see whether a settings change needs a restart
 # Paths and commands can be overridden for tests (see test/test_addon.sh).
@@ -17,6 +19,7 @@ CONFD=${SPDIF_CONFD:-/var/lib/alsa/conf.d}
 RUN=${SPDIF_RUN:-/run}
 PROC=${SPDIF_PROC:-/proc}
 DTOVERLAY=${SPDIF_DTOVERLAY:-dtoverlay}
+DTCFG=${SPDIF_DTCFG:-/sys/kernel/config/device-tree/overlays}
 PIDOF=${SPDIF_PIDOF:-pidof}
 CARD_WAIT=${SPDIF_CARD_WAIT:-6}
 
@@ -64,8 +67,27 @@ load_settings() {
 effective() { echo "extra_ms=$S_EXTRA"; }
 
 driver_loaded() { grep -q '^rpi_gpio_spdif ' "$PROC/modules" 2> /dev/null; }
-overlay_applied() { "$DTOVERLAY" -l 2> /dev/null | grep -q " $1\$"; }
+# applied: dtoverlay's list, or the kernel's configfs entry "<n>_NAME" (seen on LibreELEC: after
+# a boot the list was empty although the overlay was applied)
+overlay_applied() {
+  "$DTOVERLAY" -l 2> /dev/null | grep -q " $1\$" ||
+    ls "$DTCFG" 2> /dev/null | grep -q "^[0-9][0-9]*_$1\$"
+}
 card_there() { grep -q "\[$1 *\]" "$PROC/asound/cards" 2> /dev/null; }
+# busy: the card's playback device is open (its status is not "closed")
+card_busy() {
+  s=$PROC/asound/$1/pcm0p/sub0/status
+  [ -r "$s" ] && ! grep -q '^closed' "$s"
+}
+# drop OVERLAY CARD: remove the overlay unless its card is in use
+drop() {
+  overlay_applied "$1" || return 0
+  if card_busy "$2"; then
+    log "the sound card $2 is in use: the overlay $1 stays applied"
+  else
+    "$DTOVERLAY" -r "$1"
+  fi
+}
 # wait_card CARD: up to CARD_WAIT seconds
 wait_card() {
   i=0
@@ -168,8 +190,8 @@ stop() {
   rm -f "$APPLIED" "$CONF.tmp"
   grep -q "^$MARK" "$CONF" 2> /dev/null && rm -f "$CONF"
   rmdir "$CONFD" 2> /dev/null
-  overlay_applied $OWN && "$DTOVERLAY" -r $OWN
-  overlay_applied $STOCK && "$DTOVERLAY" -r $STOCK
+  drop $OWN $OWN_CARD
+  drop $STOCK $STOCK_CARD
   return 0
 }
 

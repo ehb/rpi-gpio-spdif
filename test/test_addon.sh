@@ -61,7 +61,12 @@ printf '%s\n' '#!/bin/sh' '[ -e "$FAKE_DIR/raspdif-running" ]' > "$T/pidof"
 chmod +x "$T/dtoverlay" "$T/pidof"
 export FAKE_DIR=$T FAKE_PROC=$PROC
 export SPDIF_ADDON=$A SPDIF_SETTINGS=$D/settings.xml SPDIF_CONFD=$CONFD SPDIF_RUN=$RUN \
-       SPDIF_PROC=$PROC SPDIF_DTOVERLAY=$T/dtoverlay SPDIF_PIDOF=$T/pidof SPDIF_CARD_WAIT=1
+       SPDIF_PROC=$PROC SPDIF_DTOVERLAY=$T/dtoverlay SPDIF_PIDOF=$T/pidof SPDIF_CARD_WAIT=1 \
+       SPDIF_DTCFG=$T/cfg
+# the kernel's configfs list of applied overlays; empty unless a check fills it
+mkdir -p "$T/cfg"
+# busy CARD: the card's playback device is open (status file as in /proc/asound)
+busy() { mkdir -p "$PROC/asound/$1/pcm0p/sub0"; printf 'state: RUNNING\n' > "$PROC/asound/$1/pcm0p/sub0/status"; }
 S="sh $A/bin/rpi-gpio-spdif"
 CONF=$CONFD/50-rpi-gpio-spdif.conf
 STATUS=$RUN/service.rpi-gpio-spdif.status
@@ -81,6 +86,7 @@ dtcount() { grep -c -x -- "$1" "$T/dt.log" 2> /dev/null || true; }
 reset_world() { # nothing applied, nothing loaded, no files
   rm -f "$CONF" "$CONF.tmp" "$STATUS" "$APPLIED" "$T/dt.log" "$T/overlays" "$T/nocard" "$T/raspdif-running" \
         "$T/ownfail" "$T/nocard_own"
+  rm -rf "$T/cfg"/* "$PROC/asound/spdifgpio21" "$PROC/asound/sndrpihifiberry"
   : > "$PROC/modules"; : > "$PROC/asound/cards"
 }
 
@@ -367,6 +373,49 @@ printf 'rpi_gpio_spdif 20480 0 - Live 0x0\n' > "$PROC/modules"
 $S start > "$T/out" 2>&1
 nocheck "kernel driver loaded: the own overlay is not applied either" grep -q spdif-gpio21 "$T/dt.log"
 rm -f "$STATUS"
+
+# Restart of the unit while the card is open (add-on update or settings change during playback):
+# the overlay must stay, otherwise the player loses the device
+reset_world
+$S start > "$T/out" 2>&1
+busy spdifgpio21
+$S stop > "$T/out" 2>&1
+check "card in use: stop leaves the own overlay applied" grep -qx spdif-gpio21 "$T/overlays"
+nocheck "  ... and does not try to remove it" grep -qx -- "-r spdif-gpio21" "$T/dt.log"
+check "  ... says so" has 'spdifgpio21 is in use: the overlay spdif-gpio21 stays applied' "$T/out"
+nocheck "  ... the ALSA file is still removed" test -e "$CONF"
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && ok "  ... the next start succeeds" || { bad "  ... the next start succeeds (rc $rc)"; cat "$T/out"; }
+check "  ... without applying the overlay a second time" sh -c "[ \"\$(grep -c -- '-d .* spdif-gpio21' '$T/dt.log')\" = 1 ]"
+check "  ... and writes the device again" has 'slave.pcm "hw:CARD=spdifgpio21"' "$CONF"
+rm -rf "$PROC/asound/spdifgpio21"
+$S stop
+check "card closed again: stop removes the overlay" grep -qx -- "-r spdif-gpio21" "$T/dt.log"
+
+reset_world
+echo hifiberry-dac > "$T/overlays"
+echo " 0 [sndrpihifiberry]: RPi-simple - snd_rpi_hifiberry_dac" > "$PROC/asound/cards"
+$S start > "$T/out" 2>&1
+busy sndrpihifiberry
+$S stop > "$T/out" 2>&1
+check "card in use: stop leaves hifiberry-dac applied too" grep -qx hifiberry-dac "$T/overlays"
+
+# Overlay applied, but dtoverlay's list is empty (seen after a boot): configfs tells
+reset_world
+mkdir -p "$T/cfg/0_spdif-gpio21"
+echo " 0 [spdifgpio21    ]: simple-card - spdif-gpio21" > "$PROC/asound/cards"
+$S start > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && ok "only configfs knows the overlay: start succeeds" || { bad "only configfs knows the overlay: start succeeds (rc $rc)"; cat "$T/out"; }
+nocheck "  ... without applying it again" grep -q -- "-d .* spdif-gpio21" "$T/dt.log"
+check "  ... uses its card" has 'slave.pcm "hw:CARD=spdifgpio21"' "$CONF"
+$S stop
+check "  ... stop removes it (card closed)" grep -qx -- "-r spdif-gpio21" "$T/dt.log"
+reset_world
+mkdir -p "$T/cfg/1_spdif-gpio21-other"
+$S start > "$T/out" 2>&1
+check "a configfs entry of another overlay does not count: the own one is applied" grep -qx -- "-d $A/overlays spdif-gpio21" "$T/dt.log"
+$S stop
+
 rm -rf "$A/overlays"
 reset_world
 
